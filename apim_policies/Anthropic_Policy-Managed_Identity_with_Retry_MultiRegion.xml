@@ -30,6 +30,37 @@
                 return &quot;false&quot;;
             }
         }" />
+        <!-- Rewrite date-postfixed model names (e.g. "claude-sonnet-4-6-20260201")
+             to the canonical deployment name that AI Foundry recognises
+             (e.g. "claude-sonnet-4-6"). The alias map is baked in at deploy
+             time by aifapim.bicep via the __MODEL_ALIAS_MAP__ sentinel so this
+             block is a pure compile-time substitution with zero runtime
+             overhead when the map is empty.
+             Note: requestModel above captures the *original* client-supplied
+             name for metric dimensions; this rewrite only affects the
+             forwarded request body. preserveContent is not used here because
+             we are replacing the body entirely. -->
+        <choose>
+            <when condition="@{
+                var aliasMap = new System.Collections.Generic.Dictionary<string, string> {
+                    __MODEL_ALIAS_MAP__
+                };
+                var body = context.Request.Body.As<JObject>(preserveContent: true);
+                var model = (string)body[&quot;model&quot;] ?? &quot;&quot;;
+                return aliasMap.ContainsKey(model);
+            }">
+                <set-body>@{
+                    var aliasMap = new System.Collections.Generic.Dictionary<string, string> {
+                        __MODEL_ALIAS_MAP__
+                    };
+                    var body = context.Request.Body.As<JObject>(preserveContent: true);
+                    var model = (string)body[&quot;model&quot;] ?? &quot;&quot;;
+                    if (aliasMap.TryGetValue(model, out string canonical))
+                        body[&quot;model&quot;] = canonical;
+                    return body.ToString(Newtonsoft.Json.Formatting.None);
+                }</set-body>
+            </when>
+        </choose>
         <llm-token-limit tokens-per-minute="10000000" counter-key="@(context.Subscription.Id)" estimate-prompt-tokens="true" tokens-consumed-header-name="consumed-tokens" remaining-tokens-header-name="remaining-tokens" />
         <!-- Emit token metrics with explicit dimensions under the APIM
              custom-metric namespace (substituted at deploy time by aifapim.bicep

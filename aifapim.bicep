@@ -103,6 +103,9 @@ param apimProductDisplayName string = 'AIFAPIM'
 @description('Description for the APIM product.')
 param apimProductDescription string = 'AI Foundry APIM product. Groups the Azure OpenAI, Azure OpenAI v1 Messages, and Anthropic APIs.'
 
+@description('Anthropic model name alias map. Each entry maps a client-supplied Anthropic model name (the "from" key) to the canonical Anthropic deployment name (the "to" value) that AI Foundry recognises. Intended for date-postfixed model names emitted by Anthropic SDK clients such as Claude Code (e.g., "claude-sonnet-4-6-20251114" -> "claude-sonnet-4-6"). Applied only to the Anthropic API policy (anthropic-service-api); the OpenAI APIs are unaffected. The map is substituted into the Anthropic policy XML at deploy time as a C# dictionary initialiser; the inbound block rewrites body["model"] before forwarding the request.')
+param anthropicModelAliases array = []
+
 // Render the IP allow-list entries as APIM ip-filter child elements. CIDR
 // entries become <address-range from=... to=.../> using parseCidr's
 // firstUsable/lastUsable; bare addresses become <address>...</address>.
@@ -110,6 +113,17 @@ var allowedIpsXml = join(map(allowedClientIps, ip => contains(ip, '/')
   ? '<address-range from="${parseCidr(ip).firstUsable}" to="${parseCidr(ip).lastUsable}" />'
   : '<address>${ip}</address>'
 ), '\n              ')
+
+// Build a C# dictionary initialiser from the anthropicModelAliases parameter
+// so it can be embedded verbatim into the Anthropic policy XML at deploy time.
+// Each entry must have "from" and "to" string keys. When the array is empty
+// the expression produces an empty initialiser ("") and the policy block
+// becomes a no-op lookup. Only Anthropic model names should appear here;
+// OpenAI deployments do not use date-postfixed names and are not affected.
+// Example output for a two-entry map:
+//   { "claude-sonnet-4-6-20251114", "claude-sonnet-4-6" },
+//   { "claude-haiku-4-5-20251001", "claude-haiku-4-5" },
+var anthropicModelAliasMapEntries = join(map(anthropicModelAliases, alias => '{ "${alias.from}", "${alias.to}" }'), ',\n                    ')
 
 // The APIM AOAI policy is always the multi-region variant.
 // Policies and API definition are loaded from the local repository so deployments do not depend on external URLs.
@@ -120,7 +134,10 @@ var allowedIpsXml = join(map(allowedClientIps, ip => contains(ip, '/')
 var openApiXml = replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName)
 
 // Anthropic API policy (multi-region retry variant).
-var anthropicApiXml = replace(replace(replace(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName)
+// __MODEL_ALIAS_MAP__ is substituted with anthropicModelAliasMapEntries so
+// that date-postfixed Anthropic model names are rewritten to the canonical
+// deployment name before the request is forwarded to AI Foundry.
+var anthropicApiXml = replace(replace(replace(replace(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__MODEL_ALIAS_MAP__', anthropicModelAliasMapEntries)
 
 // OpenAI v1 Messages API policy (multi-region retry variant).
 var openaiV1MessagesApiXml = replace(replace(replace(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName)

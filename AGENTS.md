@@ -166,6 +166,25 @@ opencode
 
 Note: the `aifapim-openapi` provider's `baseURL` points at `https://{AIFAPIM_HOST}/openai/v1`, which only exposes the OpenAI **Responses API** (`POST /v1/responses`) — Chat Completions is not proxied at that path. Verified empirically against opencode 1.14.41 + bundled `@ai-sdk/openai`: requests route to `POST /openai/v1/responses` (HTTP 200), not `/v1/chat/completions` (which would 404), for both AI-SDK-known model ids (e.g. `gpt-4.1-mini`) and custom deployment names (e.g. `my-custom-deployment-name`). If a future opencode/AI-SDK upgrade ever falls back to `/v1/chat/completions`, switch the `aifapim-openapi` provider to `"npm": "@ai-sdk/openai-compatible"` or pin a known-good `@ai-sdk/openai` version.
 
+### Model name aliases and date-postfixed model IDs
+
+Anthropic appends date postfixes to model identifiers when they release new Claude versions (e.g. `claude-sonnet-4-6-20260201`). Clients that use the Anthropic SDK — including Claude Code — may send these versioned names verbatim. Without an alias mapping the request reaches Foundry with a name that does not match any deployment resource, returns 404, and exhausts the retry loop in both regions.
+
+The `anthropicModelAliases` parameter in the bicepparam file maps these versioned names to the canonical deployment names at deploy time. The mapping is baked into the Anthropic API policy as a C# dictionary and applied in the inbound phase before the request is forwarded:
+
+```bicep
+param anthropicModelAliases = [
+  { from: 'claude-sonnet-4-6-20251114', to: 'claude-sonnet-4-6' }
+  { from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4-5' }
+  { from: 'claude-haiku-4-5-20251001',  to: 'claude-haiku-4-5'  }
+  { from: 'claude-opus-4-6-20251101',   to: 'claude-opus-4-6'   }
+  { from: 'claude-opus-4-5-20251101',   to: 'claude-opus-4-5'   }
+  { from: 'claude-opus-4-1-20250805',   to: 'claude-opus-4-1'   }
+]
+```
+
+The entries above reflect the date-postfixed model IDs found in Claude Code v2.1.152. Only include entries whose `to` value matches a `name` in your `modelDeployments` array. Redeploy with `az deployment group create` after each new alias entry. No change to `examples/opencode.json` or the deployment `modelDeployments` array is needed — the alias redirects to the existing canonical deployment.
+
 ## Resource naming
 
 All shared resources use a deterministic suffix: `uniqueString(resourceGroup().id, subscription().id)`. The APIM service name is `apim-<unique>`. Any out-of-tree subscription provisioning must target the same resource group so it can resolve the APIM service by this naming pattern.

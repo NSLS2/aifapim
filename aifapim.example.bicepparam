@@ -86,6 +86,55 @@ param apimProductName        = 'aifapim'
 param apimProductDisplayName = 'AIFAPIM'
 param apimProductDescription = 'AI Foundry APIM product. Groups the Azure OpenAI, Azure OpenAI v1 Messages, and Anthropic APIs.'
 
+// ---- Anthropic model name alias map ----
+// Maps client-supplied Anthropic model names to the canonical deployment names
+// that AI Foundry recognises. The map is baked into the Anthropic API policy
+// (anthropic-service-api) at deploy time (via the __MODEL_ALIAS_MAP__ sentinel)
+// and applied in the inbound phase before the request is forwarded to the
+// backend. The OpenAI APIs are unaffected — OpenAI clients do not send
+// date-postfixed names.
+//
+// Primary use-case: Anthropic appends date postfixes to model identifiers
+// when they release new Claude versions (e.g. "claude-sonnet-4-6-20251114").
+// Claude Code and other Anthropic SDK clients send these versioned names
+// verbatim. Without the alias map the request reaches Foundry with a name
+// that does not match any deployment resource and returns 404, causing the
+// retry loop to exhaust both regions and fail the request entirely.
+//
+// Each entry must have:
+//   from  - the exact Anthropic model string the client sends
+//   to    - the deployment resource name in AI Foundry (must match a `name`
+//           entry in modelDeployments above)
+//
+// Omit entries whose `from` and `to` values are identical — they are
+// unnecessary no-ops and add minor compile-time overhead.
+//
+// The entries below cover every date-postfixed model ID found in Claude Code
+// v2.1.152 (inspected via:
+//   strings /opt/claude-code/bin/claude | grep -oE 'claude-[a-z]+-[0-9](-[0-9]+)?-[0-9]{8}' | sort -u
+// ). Entries whose `to` value does not match any name in your modelDeployments
+// array above are silently ignored at runtime (the dictionary lookup simply
+// never matches), so it is safe to include the full list even if you have not
+// deployed every model. Remove or comment out entries only if you want to
+// deliberately block a specific versioned name from resolving.
+//
+// When a new Claude Code release introduces additional date-postfixed IDs,
+// add them here and redeploy. No change to modelDeployments is required.
+param anthropicModelAliases = [
+  // claude-sonnet-4-6-20251114 is the versioned ID Claude Code sends for
+  // the current default model (claude-sonnet-4-6) as of v2.1.152.
+  { from: 'claude-sonnet-4-6-20251114', to: 'claude-sonnet-4-6' }
+  { from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4-5' }
+  { from: 'claude-haiku-4-5-20251001',  to: 'claude-haiku-4-5'  }
+  { from: 'claude-opus-4-6-20251101',   to: 'claude-opus-4-6'   }
+  { from: 'claude-opus-4-5-20251101',   to: 'claude-opus-4-5'   }
+  { from: 'claude-opus-4-1-20250805',   to: 'claude-opus-4-1'   }
+  // Deprecated generation-only IDs (claude-opus-4-0 / claude-sonnet-4-0).
+  // Safe to leave in; they will no-op if those deployments don't exist.
+  { from: 'claude-opus-4-20250514',   to: 'claude-opus-4-0'   }
+  { from: 'claude-sonnet-4-20250514', to: 'claude-sonnet-4-0' }
+]
+
 // ---- Inbound IP allow-list ----
 // Applied to all three APIM APIs. Entries are either a single IPv4 address
 // or a CIDR range. CIDR entries are expanded via parseCidr().firstUsable/
