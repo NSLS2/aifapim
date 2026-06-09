@@ -116,14 +116,18 @@ var allowedIpsXml = join(map(allowedClientIps, ip => contains(ip, '/')
 
 // Build a C# dictionary initialiser from the anthropicModelAliases parameter
 // so it can be embedded verbatim into the Anthropic policy XML at deploy time.
-// Each entry must have "from" and "to" string keys. When the array is empty
-// the expression produces an empty initialiser ("") and the policy block
-// becomes a no-op lookup. Only Anthropic model names should appear here;
+// Each entry maps a "from" model name to a "to" deployment name. When the array
+// is empty the expression produces an empty initialiser ("") and the policy
+// block becomes a no-op lookup. Only Anthropic model names should appear here;
 // OpenAI deployments do not use date-postfixed names and are not affected.
+// String literals are XML-entity-escaped (&quot;) rather than raw double quotes:
+// __MODEL_ALIAS_MAP__ is substituted into a double-quoted XML attribute
+// (<set-variable value="..."> in the policy), so a raw " would terminate the
+// attribute and make the policy document malformed, failing the APIM import.
 // Example output for a two-entry map:
-//   { "claude-sonnet-4-6-20251114", "claude-sonnet-4-6" },
-//   { "claude-haiku-4-5-20251001", "claude-haiku-4-5" },
-var anthropicModelAliasMapEntries = join(map(anthropicModelAliases, alias => '{ "${alias.from}", "${alias.to}" }'), ',\n                    ')
+//   { &quot;claude-sonnet-4-6-20251114&quot;, &quot;claude-sonnet-4-6&quot; },
+//   { &quot;claude-haiku-4-5-20251001&quot;, &quot;claude-haiku-4-5&quot; },
+var anthropicModelAliasMapEntries = join(map(anthropicModelAliases, alias => '{ &quot;${alias.from}&quot;, &quot;${alias.to}&quot; }'), ',\n                    ')
 
 // The APIM AOAI policy is always the multi-region variant.
 // Policies and API definition are loaded from the local repository so deployments do not depend on external URLs.
