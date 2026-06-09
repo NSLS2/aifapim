@@ -185,6 +185,44 @@ param anthropicModelAliases = [
 
 The entries above reflect the date-postfixed model IDs found in Claude Code v2.1.152. Only include entries whose `to` value matches a `name` in your `modelDeployments` array. Redeploy with `az deployment group create` after each new alias entry. No change to `examples/opencode.json` or the deployment `modelDeployments` array is needed — the alias redirects to the existing canonical deployment.
 
+#### Regenerating and verifying the alias list
+
+Re-scrape the installed binary whenever Claude Code updates:
+
+```bash
+strings /opt/claude-code/bin/claude | grep -oE 'claude-[a-z]+-[0-9](-[0-9]+)?-[0-9]{8}' | sort -u
+```
+
+Then **verify each scraped `from:` value against the official Anthropic model catalog**
+(<https://platform.claude.com/docs/en/about-claude/models/overview>) before trusting it — a
+date suffix the binary carries but the catalog does not publish is plausible (Claude Code
+embeds snapshot IDs the public catalog only exposes as bare aliases) but should be flagged as
+binary-sourced, not catalog-confirmed. Last verified against **Claude Code v2.1.168 on
+2026-06-08**:
+
+| Scraped `from:` ID            | Catalog full ID / alias                    | Status                                  |
+| ----------------------------- | ------------------------------------------ | --------------------------------------- |
+| `claude-haiku-4-5-20251001`   | `claude-haiku-4-5-20251001`                | ✅ exact catalog match                   |
+| `claude-opus-4-1-20250805`    | `claude-opus-4-1-20250805`                 | ✅ exact catalog match                   |
+| `claude-opus-4-20250514`      | `claude-opus-4-20250514` (alias `…-4-0`)   | ✅ exact catalog match                   |
+| `claude-opus-4-5-20251101`    | `claude-opus-4-5-20251101`                 | ✅ exact catalog match                   |
+| `claude-opus-4-6-20251101`    | catalog publishes only alias `claude-opus-4-6`   | ⚠️ binary-sourced; alias is valid |
+| `claude-sonnet-4-20250514`    | `claude-sonnet-4-20250514` (alias `…-4-0`) | ✅ exact catalog match                   |
+| `claude-sonnet-4-5-20250929`  | `claude-sonnet-4-5-20250929`               | ✅ exact catalog match                   |
+| `claude-sonnet-4-6-20251114`  | catalog publishes only alias `claude-sonnet-4-6` | ⚠️ binary-sourced; alias is valid |
+
+Two classes of model ID the narrow `[0-9]{8}` regex above **does not** catch (confirmed present
+in v2.1.168 via a broader scrape — `grep -oE 'claude-(opus|sonnet|haiku)-[0-9]+(-[0-9]+)?(-[0-9]{8})?(\[1m\])?'`):
+
+- **Bare aliases with no date suffix** — `claude-opus-4-7`, `claude-opus-4-8`. These are valid
+  current catalog aliases. Because they carry no date postfix they pass through the policy
+  unrewritten and match a `modelDeployments` entry of the same name directly; they need an alias
+  entry only if your canonical deployment uses a *different* name.
+- **`[1m]` (1M-context) variants** — e.g. `claude-opus-4-7[1m]`, `claude-sonnet-4-5-20250929[1m]`.
+  These will **not** match a plain `claude-opus-4-7`-style deployment and are **not** covered by the
+  current alias map (whose `from:` keys are all plain strings). If any client requests a 1M-context
+  model, add explicit `from: 'claude-…[1m]'` entries mapping to the canonical deployment.
+
 ## Resource naming
 
 All shared resources use a deterministic suffix: `uniqueString(resourceGroup().id, subscription().id)`. The APIM service name is `apim-<unique>`. Any out-of-tree subscription provisioning must target the same resource group so it can resolve the APIM service by this naming pattern.
