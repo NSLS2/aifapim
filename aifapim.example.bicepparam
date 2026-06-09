@@ -112,10 +112,10 @@ param apimProductDescription = 'AI Foundry APIM product. Groups the Azure OpenAI
 // The entries below cover every date-postfixed model ID found in Claude Code
 // v2.1.152 (inspected via:
 //   strings /opt/claude-code/bin/claude | grep -oE 'claude-[a-z]+-[0-9](-[0-9]+)?-[0-9]{8}' | sort -u
-// ). Entries whose `to` value does not match any name in your modelDeployments
-// array above are silently ignored at runtime (the dictionary lookup simply
-// never matches), so it is safe to include the full list even if you have not
-// deployed every model. Remove or comment out entries only if you want to
+// ). Entries are only applied when the incoming request's `model` exactly matches a `from` key.
+// If a `from` matches but its `to` value does not correspond to a deployed model name,
+// the policy will rewrite the request to that non-existent deployment and the backend will 404.
+// Keep `to` values aligned with your `modelDeployments[*].name` entries; remove entries you don't want to resolve.
 // deliberately block a specific versioned name from resolving.
 //
 // When a new Claude Code release introduces additional date-postfixed IDs,

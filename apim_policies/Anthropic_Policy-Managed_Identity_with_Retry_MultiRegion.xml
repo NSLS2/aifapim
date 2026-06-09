@@ -51,6 +51,7 @@
                 var aliasMap = new System.Collections.Generic.Dictionary&lt;string, string&gt; {
                     __MODEL_ALIAS_MAP__
                 };
+                if (aliasMap.Count == 0) { return &quot;&quot;; }
                 var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true);
                 var model = (string)body[&quot;model&quot;] ?? &quot;&quot;;
                 return aliasMap.TryGetValue(model, out string canonical) ? canonical : &quot;&quot;;
