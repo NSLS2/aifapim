@@ -559,13 +559,15 @@ Things to know:
   (Anthropic completion tokens are not measured for streamed requests, as for
   keys). A keyless request has no subscription, so the gateway log alone cannot
   name the caller.
+  The log holds several rows per request (extra rows with zero tokens), so count
+  requests with `dcount(RequestId)`, not `count()`.
 
   ```kusto
   AppTraces
   | where TimeGenerated > ago(1d) and isnotempty(tostring(Properties.CallerType))
   | extend RequestId = tostring(Properties.RequestId), Caller = tostring(Properties.CallerId)
   | join kind=inner (ApiManagementGatewayLlmLog | where TimeGenerated > ago(1d)) on $left.RequestId == $right.CorrelationId
-  | summarize Requests = count(), PromptTokens = sum(PromptTokens), CompletionTokens = sum(CompletionTokens) by Caller, CallerName = tostring(Properties.CallerName), CallerType = tostring(Properties.CallerType)
+  | summarize Requests = dcount(RequestId), PromptTokens = sum(PromptTokens), CompletionTokens = sum(CompletionTokens) by Caller, CallerName = tostring(Properties.CallerName), CallerType = tostring(Properties.CallerType)
   ```
 
 - **Who may get a token** is decided in Entra ID: expose the delegated scope on

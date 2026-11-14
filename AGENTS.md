@@ -317,13 +317,29 @@ Fetch the keys with
       the client ID). The NSLS2 N2C client is pre-authorized for the scope, the
       role is assigned to groups, and "Assignment required" is on. Keep the
       real IDs in the environment's parameter file: this repository is public.
-    - **Not verified until the first dev run:** that `context.Subscription` is
-      null (not an error) in a keyless request; that APIM accepts an invalid key
-      in a keyless request and falls through to the open product; that
-      `trace` records land in `AppTraces` with `context.RequestId` equal to
-      `CorrelationId`; that `<set-header name="Authorization" exists-action=
-      "delete">` leaves nothing for the backend; whether creating the product
-      also creates an Administrator key (check `ownerId` `/users/1`).
+    - **Verified on dev, 2026-11-14** (person token through the N2C client,
+      from the NAT pool, `aifapim-dev.nsls2.bnl.gov`): a keyless request works
+      (`context.Subscription` is null, no error) for `/catalog`, Anthropic
+      (`claude-auto`) and OpenAI v1; a placeholder `x-api-key` is ignored and
+      falls through to the open product; no token, a garbage token and a valid
+      token for another API all get 401 from `validate-azure-ad-token`
+      (`TokenNotPresent`, `Invalid JWT.`, `Validation Failed`); the usage trace
+      lands in `AppTraces` and its `RequestId` equals the gateway's
+      `CorrelationId`; the token and metric rows name the caller (`Subscription
+      ID` is the `oid`, `Subscription Name` the `name` claim); the backend
+      accepts the call, so the caller's token is replaced and not forwarded.
+      The gateway log has no subscription for a keyless call, so the usage
+      trace is the only per-caller record. `ApiManagementGatewayLlmLog` has
+      several rows per request, with only one holding the tokens: count
+      requests with `dcount(RequestId)`.
+    - **Side effect:** creating the open product also created an active key for
+      APIM's built-in Administrator (owner `/users/1`). It does not skip the
+      token check (a valid key puts the request in its own product, so this
+      product's policy still runs), but delete it, as for any new product.
+    - **Not verified yet:** the service-principal branch (an app-only
+      certificate token with `Inference.Invoke`); a keyed request after the
+      change (keyed traffic has not been re-tested since the policies changed);
+      that APIM refuses a second open product.
     - Check expressions with `pwsh -NoProfile -File
       tests/policy/caller-policy-test.ps1` (fake context, unsigned tokens; it
       does not run `validate-azure-ad-token`).
