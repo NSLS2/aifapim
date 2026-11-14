@@ -11,16 +11,20 @@
              so refused requests are recorded too. -->
         <set-variable name="usageModel" value="@{
             var m = System.Text.RegularExpressions.Regex.Replace((string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, (string)context.Variables.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;)), &quot;[^A-Za-z0-9._@\\-]&quot;, &quot;_&quot;);
+            if (m.Length == 0) { return &quot;-&quot;; }
             return m.Length &gt; 64 ? m.Substring(0, 64) : m;
         }" />
+        <!-- A trace metadata value must not be empty: APIM fails the request with a 500
+             (ExpressionValueValidationFailure, "The value field is required"). Every value
+             below falls back to a dash. A keyed request has no client, for instance. -->
         <trace source="aifapim-usage" severity="information">
             <message>usage</message>
-            <metadata name="RequestId" value="@(context.RequestId.ToString())" />
-            <metadata name="CallerType" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerType&quot;, &quot;&quot;) : &quot;key&quot;)" />
-            <metadata name="CallerId" value="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
-            <metadata name="CallerName" value="@((string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;))" />
-            <metadata name="Client" value="@((string)context.Variables.GetValueOrDefault(&quot;callerClient&quot;, &quot;&quot;))" />
-            <metadata name="Api" value="@(context.Api.Name)" />
-            <metadata name="Product" value="@(context.Product == null ? &quot;&quot; : context.Product.Id)" />
-            <metadata name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;usageModel&quot;, &quot;&quot;))" />
+            <metadata name="RequestId" value="@{ var v = context.RequestId.ToString(); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="CallerType" value="@{ var v = context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerType&quot;, &quot;&quot;) : &quot;key&quot;; return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="CallerId" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="CallerName" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="Client" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;callerClient&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="Api" value="@{ var v = context.Api.Name; return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="Product" value="@{ var v = context.Product == null ? null : context.Product.Id; return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="Model" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;usageModel&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
         </trace>

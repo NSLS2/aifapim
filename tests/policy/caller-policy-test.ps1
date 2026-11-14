@@ -64,6 +64,13 @@ $service = @($validators | Where-Object { $_.SelectNodes('.//claim[@name="scp"]'
 Check (($service.Count -eq 1) -and ($service[0].SelectNodes('.//claim[@name="azpacr"]/value').InnerText -eq '2')) 'the service branch requires a certificate token (azpacr 2)'
 
 # ---- compiled expressions ------------------------------------------------------------------
+function MetaBody($xml, $name) {
+    $v = ($xml.SelectNodes('//metadata') | Where-Object { $_.name -eq $name } | Select-Object -First 1).value.Trim()
+    if ($v.StartsWith('@{') -and $v.EndsWith('}')) { return $v.Substring(2, $v.Length - 3) }
+    if ($v.StartsWith('@(') -and $v.EndsWith(')')) { return 'return ' + $v.Substring(2, $v.Length - 3) + ';' }
+    throw "metadata $name is not an expression"
+}
+$metaNames = @('RequestId', 'CallerType', 'CallerId', 'CallerName', 'Client', 'Api', 'Product', 'Model')
 function Body($xml, $name) {
     $v = ($xml.SelectNodes('//set-variable') | Where-Object { $_.name -eq $name } | Select-Object -First 1).value.Trim()
     if ($v.StartsWith('@{') -and $v.EndsWith('}')) { return $v.Substring(2, $v.Length - 3) }
@@ -84,7 +91,9 @@ public class Vars {
 public class Claims { public Dictionary<string,string> d = new Dictionary<string,string>(); public string GetValueOrDefault(string k, string def){ return d.ContainsKey(k)? d[k]:def; } }
 public class Jwt { public Claims Claims = new Claims(); }
 public class Sub { public string Id; public string Name; }
-public class Ctx { public Req Request = new Req(); public Vars Variables = new Vars(); public Sub Subscription; }
+public class ApiInfo { public string Name = "Anthropic Service API"; }
+public class ProdInfo { public string Id; }
+public class Ctx { public Req Request = new Req(); public Vars Variables = new Vars(); public Sub Subscription; public ApiInfo Api = new ApiInfo(); public ProdInfo Product; public Guid RequestId = Guid.NewGuid(); }
 public static class Ext {
   public static Jwt AsJwt(this string s) {
     try {
@@ -107,6 +116,7 @@ public static class Pol {
   public static object UsageId(Ctx context) { $(Body $anthropic 'usageId') }
   public static object UsageName(Ctx context) { $(Body $anthropic 'usageName') }
   public static object UsageModel(Ctx context) { $(Body $trace 'usageModel') }
+$(($metaNames | ForEach-Object { '  public static object Meta' + $_ + '(Ctx context) { ' + (MetaBody $trace $_) + ' }' }) -join "`n")
 }
 "@
 $refs = @((Join-Path $PSHOME 'Newtonsoft.Json.dll'), 'System.Collections', 'System.Runtime', 'System.Text.RegularExpressions', 'System.Linq', 'System.Linq.Expressions', 'System.ComponentModel.TypeConverter', 'System.ObjectModel', 'System.Private.CoreLib', 'netstandard')
@@ -184,7 +194,36 @@ Check ([Pol]::UsageModel($c).Length -eq 64) 'a long model name is cut to 64 char
 $c = New-Object Ctx; $c.Variables.d['deploymentName'] = 'gpt-5'
 Check ([Pol]::UsageModel($c) -eq 'gpt-5') 'the deployment name is the fallback model'
 $c = New-Object Ctx
-Check ([Pol]::UsageModel($c) -eq '') 'no model gives an empty model'
+Check ([Pol]::UsageModel($c) -eq '-') 'no model gives a dash, never an empty value'
+
+# Every trace metadata value must be non-empty: APIM answers 500 (ExpressionValueValidationFailure,
+# "The value field is required") when one is empty, and that happened to every keyed request on dev.
+function MetaValues($c) {
+    $c.Variables.d['usageModel'] = [Pol]::UsageModel($c)
+    $o = @{}
+    foreach ($n in $metaNames) { $o[$n] = [Pol]::('Meta' + $n).Invoke($c) }
+    return $o
+}
+function AllNonEmpty($o) { foreach ($n in $metaNames) { if ([string]::IsNullOrEmpty([string]$o[$n])) { return $false } }; return $true }
+# a keyed request: no caller variables at all, no client
+$c = New-Object Ctx; $c.Subscription = New-Object Sub; $c.Subscription.Id = 'sub-oid'; $c.Subscription.Name = 'Grace Hopper'
+$c.Product = New-Object ProdInfo; $c.Product.Id = 'nsls2aifapim'; $c.Variables.d['requestModel'] = 'gpt-4.1'
+$c.Variables.d['usageId'] = [Pol]::UsageId($c); $c.Variables.d['usageName'] = [Pol]::UsageName($c)
+$m = MetaValues $c
+Check (AllNonEmpty $m) 'trace metadata, keyed request: no value is empty'
+Check (($m['CallerType'] -eq 'key') -and ($m['Client'] -eq '-') -and ($m['CallerName'] -eq 'Grace Hopper')) 'trace metadata, keyed request: key type, no client, subscription name'
+# a keyless request through the open product
+$c = New-Object Ctx; $c.Product = New-Object ProdInfo; $c.Product.Id = 'nsls2aifapim-open'; $c.Variables.d['requestModel'] = 'claude-auto'
+$c.Variables.d['callerId'] = $oid.ToLowerInvariant(); $c.Variables.d['callerName'] = 'Ada Lovelace'; $c.Variables.d['callerType'] = 'user'
+$c.Variables.d['callerClient'] = '11111111-1111-1111-1111-111111111111'
+$c.Variables.d['usageId'] = [Pol]::UsageId($c); $c.Variables.d['usageName'] = [Pol]::UsageName($c)
+$m = MetaValues $c
+Check (AllNonEmpty $m) 'trace metadata, keyless request: no value is empty'
+Check (($m['CallerType'] -eq 'user') -and ($m['CallerId'] -eq $oid.ToLowerInvariant()) -and ($m['Product'] -eq 'nsls2aifapim-open') -and ($m['Model'] -eq 'claude-auto')) 'trace metadata, keyless request: caller, product and model are recorded'
+# nothing known: a model listing with no model, no product, no caller
+$c = New-Object Ctx
+$m = MetaValues $c
+Check (AllNonEmpty $m) 'trace metadata, nothing set: no value is empty (a dash is used)'
 
 "failures: $bad"
 if ($bad -gt 0) { exit 1 }
