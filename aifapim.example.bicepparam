@@ -195,6 +195,12 @@ param serviceProducts = [
   }
 ]
 
+// Switch for the open product above. false keeps the product but gives it a policy
+// that refuses every request (401 OpenProductDisabled), so nothing gets in without a
+// key; use it to keep an environment keyed-only while its parameter file still lists
+// the open product. Default true.
+param openProductEnabled = true
+
 // ---- Usage record (optional) ----
 // When true, every request to the five inference APIs writes one Application
 // Insights trace (AppTraces) naming the caller: the subscription id of a key, or

@@ -121,6 +121,9 @@ param apimProductDescription string = 'AI Foundry APIM product. Groups the Azure
 @description('Extra APIM products for service (machine) keys. Each entry is { name, displayName, description, allowedClientIps?, entraAuth? }. Each holds the three inference APIs and the catalog API, like the user product. allowedClientIps (IPv4 addresses, or CIDR ranges taken from the network to the broadcast address) restricts the product to those callers, in addition to the global allowedClientIps. entraAuth ({ tenantId, audience, role }) makes the product need a Microsoft Entra ID app-only access token as well as the key: signed by the tenant, issued for the audience (the client ID of the gateway API app), holding the app role, and obtained with a certificate. open: true makes it the OPEN product: no subscription key is needed, the Entra token alone decides access, from a service principal (the app role, with a certificate) or from a person (a delegated token holding the scope). An open product needs entraAuth { tenantId, audience, role, scope, userRole } (role is the app role for services, scope the delegated scope and userRole the app role a person must hold) and may add clientApplicationIds (client app IDs allowed to ask for a person\'s token); without them it denies every request. An API can be in only one open product, so there is at most one. Keep the real values out of this repository (they belong in the environment parameter file).')
 param serviceProducts array = []
 
+@description('Switch for the open (keyless) product. When false, an entry of serviceProducts with open: true is still created, but its policy refuses every request with HTTP 401 OpenProductDisabled, so no request gets in without a subscription key. The product is not deleted (an incremental deployment never deletes it), so switching off always means this refusing policy. Default true.')
+param openProductEnabled bool = true
+
 @description('The claude-auto model of the Anthropic API: the gateway rates the request with a small classifier model and rewrites the model to one of three real models. Leave empty to turn it off. Keys, all required when set: classifierModel, simpleModel, mediumModel and complexModel, each the name of a deployment in the primary region. The complex model is also the answer when the classifier fails.')
 param claudeAuto object = {}
 
@@ -296,8 +299,10 @@ var productEntraAuthPolicyTemplate = loadTextContent('apim_policies/Product_Entr
 // scope and userRole; role is not used); anything less renders a policy that refuses every request, never an
 // inheritance-only one, which would leave the product open to anyone. The optional
 // clientApplicationIds list is written as client-application-ids in the branch
-// that validates a person's token.
+// that validates a person's token. With openProductEnabled false the open product
+// gets a policy that refuses every request instead (401 OpenProductDisabled).
 var productEntraOpenPolicyTemplate = loadTextContent('apim_policies/Product_EntraOpen_Policy.xml')
+var productOpenDisabledPolicyXml = '<policies><inbound><base /><return-response><set-status code="401" reason="Unauthorized" /><set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header><set-body>{"error":{"code":"OpenProductDisabled","message":"Keyless access is switched off on this gateway. Send a subscription key in the x-api-key header."}}</set-body></return-response></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
 var productDenyAllPolicyXml = '<policies><inbound><base /><return-response><set-status code="503" reason="Service Unavailable" /><set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header><set-body>{"error":{"code":"ProductNotConfigured","message":"This product is open but its Entra ID settings are incomplete."}}</set-body></return-response></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
 func entraOpenComplete(e object) bool => !empty(e.?tenantId ?? '') && !empty(e.?audience ?? '') && !empty(e.?scope ?? '') && !empty(e.?userRole ?? '')
 func clientAppsXml(ids array) string => empty(ids) ? '' : '<client-application-ids>\n                        ${join(map(ids, id => '<application-id>${replace(replace(replace(replace(replace(id, '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '"', '&quot;'), '\'', '&apos;')}</application-id>'), '\n                        ')}\n                    </client-application-ids>'
@@ -307,7 +312,9 @@ var serviceProductsResolved = map(serviceProducts, p => {
   description: p.description
   open: p.?open ?? false
   policyXml: (p.?open ?? false)
-    ? (entraOpenComplete(p.?entraAuth ?? {})
+    ? !openProductEnabled
+      ? productOpenDisabledPolicyXml
+      : (entraOpenComplete(p.?entraAuth ?? {})
         ? replace(replace(replace(replace(replace(replace(productEntraOpenPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [])), '__ENTRA_CLIENT_APPS__', clientAppsXml(p.entraAuth.?clientApplicationIds ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_SCOPE__', xmlEscape(p.entraAuth.scope)), '__ENTRA_USER_ROLE__', xmlEscape(p.entraAuth.userRole))
         : productDenyAllPolicyXml)
     : !empty(p.?entraAuth ?? {})

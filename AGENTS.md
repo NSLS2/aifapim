@@ -353,6 +353,12 @@ Fetch the keys with
       `open: true` on an existing keyed product flips it to keyless while its
       old policy and links are still there. Add an open product under a new
       name instead.
+    - **Switched off with `openProductEnabled = false`.** The open product is
+      still created (or kept), but its policy refuses every request with 401
+      `OpenProductDisabled`, so keyless callers get nothing; keyed callers are
+      unaffected because a valid key puts the request in its own product.
+      Switching off never removes the product: an incremental deployment does
+      not delete it, so the refusing policy is how it is closed.
     - **Side effect:** creating the open product also created an active key for
       APIM's built-in Administrator (owner `/users/1`). It does not skip the
       token check (a valid key puts the request in its own product, so this
