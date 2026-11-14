@@ -16,6 +16,7 @@ param(
     [string]$PolicyDir = (Join-Path $PSScriptRoot '../../apim_policies')
 )
 $WarningPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 $bad = 0
 function Check($ok, $what) {
     if (-not $ok) { $script:bad++ }
