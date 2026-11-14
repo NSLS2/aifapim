@@ -18,13 +18,27 @@
         <set-query-parameter name="api-version" exists-action="skip">
             <value>preview</value>
         </set-query-parameter>
+        <!-- The deployment name is the body's model field, FLUX.2-pro when it is
+             left out. Only a plain deployment name is kept, so a client cannot
+             put arbitrary text into the metric dimension or the usage record;
+             anything else is recorded as an empty name and never fails over. -->
+        <set-variable name="requestModel" value="@{
+            try {
+                var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true);
+                var model = (string)body[&quot;model&quot;] ?? &quot;FLUX.2-pro&quot;;
+                return System.Text.RegularExpressions.Regex.IsMatch(model, &quot;^[A-Za-z0-9._-]{1,64}$&quot;) ? model : &quot;&quot;;
+            } catch {
+                return &quot;&quot;;
+            }
+        }" />
         <!-- __REQUEST_LOG__ -->
         <!-- Fail over to the secondary region only when the model is deployed
              there. aifapim.bicep fills in the model list below at deploy time,
              as '|name|name|...' from modelDeployments[0]. The placeholder is
              replaced everywhere it appears, so it must stay out of comments. -->
         <set-variable name="canFailover" value="@{
-            return &quot;__SECONDARY_MODELS__&quot;.Contains(&quot;|FLUX.2-pro|&quot;);
+            var model = (string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;);
+            return model.Length &gt; 0 &amp;&amp; &quot;__SECONDARY_MODELS__&quot;.Contains(&quot;|&quot; + model + &quot;|&quot;);
         }" />
         <!-- Image requests carry no token usage, so there is no token limit or
              token metric here. They are counted in outbound. -->
@@ -63,7 +77,7 @@
                     <dimension name="Subscription Name" value="@((string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;))" />
                     <dimension name="User ID" />
                     <dimension name="Product ID" />
-                    <dimension name="Model" value="FLUX.2-pro" />
+                    <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;))" />
                     <dimension name="X-Forwarded-For" value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress))" />
                 </emit-metric>
             </when>
