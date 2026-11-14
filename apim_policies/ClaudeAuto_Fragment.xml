@@ -85,7 +85,6 @@
                                 var req = new JObject(
                                     new JProperty("model", "__CLAUDE_AUTO_CLASSIFIER__"),
                                     new JProperty("max_tokens", 8),
-                                    new JProperty("temperature", 0),
                                     new JProperty("system", system),
                                     new JProperty("messages", new JArray(new JObject(
                                         new JProperty("role", "user"),

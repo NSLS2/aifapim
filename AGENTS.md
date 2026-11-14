@@ -506,7 +506,9 @@ Fetch the keys with
   2. sends it to the classifier model on the primary account with
      `send-request` (5 s timeout, direct to Foundry, so it does not pass
      through the gateway again and is not counted by the caller's token
-     limit) and reads `simple`, `medium` or `complex`;
+     limit) and reads `simple`, `medium` or `complex`. The request sends no
+     `temperature`: the 5.x Claude models refuse it (Microsoft Learn), and a
+     refused classifier call would rate every request complex;
   3. rewrites `model` in the body, and sets `requestModel`, so the failover
      check, token metrics and the `Model` dimension see the real model.
   A classifier error, timeout or odd answer gives `complexModel` (the safe

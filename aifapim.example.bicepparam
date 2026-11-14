@@ -114,7 +114,7 @@ param catalogJson = loadTextContent('./model-catalog.example.json')
 // must be deployments in the primary region (regions[1]) below. Leave it empty to
 // turn it off. Add the entries below to modelDeployments before you set it.
 // param claudeAuto = {
-//   classifierModel: 'claude-haiku-4-5'
+//   classifierModel: 'claude-haiku-5-5'
 //   simpleModel: 'claude-haiku-5-5'
 //   mediumModel: 'claude-sonnet-5-5'
 //   complexModel: 'claude-opus-5-5'
