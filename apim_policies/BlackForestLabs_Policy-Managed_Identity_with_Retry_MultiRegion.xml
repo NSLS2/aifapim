@@ -15,6 +15,14 @@
              subscription directly: context.Subscription is null without a key. -->
         <set-variable name="usageId" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerId&quot;, &quot;&quot;) : context.Subscription.Id)" />
         <set-variable name="usageName" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerName&quot;, &quot;&quot;) : context.Subscription.Name)" />
+        <!-- Image requests per caller. Images carry no tokens, so the token limit does
+             not cover them. One counter per caller (usageId) is shared by every image
+             route of the gateway (the counter key is the same in all four image
+             policies), so a caller cannot multiply the limit by switching APIs.
+             The limit is filled in by aifapim.bicep
+             (imageRequestsPerMinute). It runs before the request body log, so a
+             refused request is not stored. -->
+        <rate-limit-by-key calls="__IMAGE_REQUESTS_PER_MINUTE__" renewal-period="60" counter-key="@(&quot;images:&quot; + (string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
         <set-query-parameter name="api-version" exists-action="skip">
             <value>preview</value>
         </set-query-parameter>

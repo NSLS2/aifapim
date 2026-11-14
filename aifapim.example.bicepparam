@@ -75,6 +75,12 @@ param anthropicCapacity = 100
 // Capped at 240 on classic-tier APIM.
 param backendTimeoutSeconds = 240
 
+// ---- Image requests per caller (per minute) ----
+// One counter per caller (subscription, or token object id for a keyless
+// caller) shared by every image route. Images carry no tokens, so the token
+// limit does not cover them. Default 10.
+param imageRequestsPerMinute = 10
+
 // ---- APIM product ----
 // All three APIs (azure-openai-service-api, azure-openai-v1-messages-api,
 // anthropic-service-api) are grouped under this product. The same value is

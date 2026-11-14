@@ -54,6 +54,21 @@ foreach ($name in $inference) {
     $base = $text.IndexOf('<base />')
     Check (($base -ge 0) -and ($first -gt $base)) ('{0}: usageId is set after the first <base /> (the product policy has run)' -f $name)
 }
+# Every image route limits requests per caller with one shared counter, set from usageId and
+# placed before the request body log, so a refused request is neither sent nor stored.
+$imageLimitKey = 'counter-key="@(&quot;images:&quot; + (string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))"'
+foreach ($name in $inference) {
+    $text = Get-Content -Raw (Join-Path $PolicyDir $name)
+    $limits = [regex]::Matches($text, '<rate-limit-by-key [^>]*>')
+    if ($name -like 'Anthropic*') {
+        Check ($limits.Count -eq 0) ('{0}: no image request limit (no image routes)' -f $name)
+        continue
+    }
+    Check (($limits.Count -eq 1) -and $limits[0].Value.Contains($imageLimitKey) -and $limits[0].Value.Contains('calls="__IMAGE_REQUESTS_PER_MINUTE__"')) ('{0}: one image request limit, keyed images:usageId' -f $name)
+    $at = $text.IndexOf('<rate-limit-by-key')
+    Check (($at -gt $text.IndexOf('name="usageId"')) -and ($at -lt $text.IndexOf('<!-- __REQUEST_LOG__ -->'))) ('{0}: image limit is after usageId and before the request log' -f $name)
+}
+
 # Every API spec declares the gateway's credentials, not Azure's: the x-api-key header or an Entra
 # token (bearer), at the top level, with no operation overriding them. A client generated from a
 # spec otherwise sends the key under a name the gateway does not read.

@@ -550,6 +550,17 @@ Fetch the keys with
     `formFields` reader as the MAI policy, so a prompt that imitates a
     `model` part is not taken for it (verified on dev, 2026-11-14: such an
     edit was recorded as `gpt-image-2.5-flare`).
+  - **Image requests are limited per caller** (`imageRequestsPerMinute`,
+    default 10 per minute), because the token limit does not cover them. The
+    AOAI (paths with `/images/`), v1 (same), Black Forest Labs and MAI policies
+    each run `rate-limit-by-key` with the counter key `images:` + `usageId`,
+    so one counter per caller (subscription, or the token's object id for a
+    keyless caller) is shared by every image route. Over the limit APIM
+    answers 429 with `Retry-After`. It runs after `usageId` is set and before
+    the request body log, so a refused request is neither sent nor stored.
+    `tests/policy/caller-policy-test.ps1` checks the key and the position.
+    Added after a security review of the open product (2026-11-14): without
+    it one token holder could use all image capacity and run up charges.
   - They are not added to `model-catalog.json`: `/catalog` lists chat models
     with token windows only. Image models are in `/catalog/images`.
   - The other image models (`gpt-image-*`, `MAI-Image-*`, `FLUX.2-flex`) offer
