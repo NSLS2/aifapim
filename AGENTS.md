@@ -162,10 +162,10 @@ Fetch the keys with
     accounts. The response is synchronous (`data[0].b64_json`). The policy
     has no token limit and emits `Image Count`. `requestModel` (the `Model`
     dimension, the usage record and the failover check) is the body's `model`,
-    `FLUX.2-pro` when it is left out, kept only when it is a plain deployment
-    name. Add another BFL model path by adding an operation to
-    `BlackForestLabs_OpenAPI.json`. Grouped under `apimProductName` product
-    and the service products.
+    kept only when it is a plain deployment name. `model` is required: without
+    it Azure answers 400 `no_model_name` (dev, 2026-11-14). Add another BFL
+    model path by adding an operation to `BlackForestLabs_OpenAPI.json`.
+    Grouped under `apimProductName` product and the service products.
   - `mai-image-api` — path `mai/v1`, `POST /images/generations` (JSON) and
     `POST /images/edits` (multipart, up to five reference images). Microsoft's
     MAI image models use these routes on the account's `services.ai.azure.com`
@@ -544,8 +544,10 @@ Fetch the keys with
   - Both inference policies skip the token limit and token metric policies
     when the path contains `/images/`, and emit an `Image Count` metric
     (value = images in the response `data`) in `<outbound>` instead. The v1
-    policy reads `model` from the multipart form text when the body is not
-    JSON, because edits are multipart.
+    policy reads `model` from a multipart body (edits) with the same
+    `formFields` reader as the MAI policy, so a prompt that imitates a
+    `model` part is not taken for it (verified on dev, 2026-11-14: such an
+    edit was recorded as `gpt-image-2.5-flare`).
   - They are not added to `model-catalog.json`: `/catalog` lists chat models
     with token windows only. Image models are in `/catalog/images`.
   - The other image models (`gpt-image-*`, `MAI-Image-*`, `FLUX.2-flex`) offer

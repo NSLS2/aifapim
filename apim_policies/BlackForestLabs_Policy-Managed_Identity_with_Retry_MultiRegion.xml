@@ -18,14 +18,15 @@
         <set-query-parameter name="api-version" exists-action="skip">
             <value>preview</value>
         </set-query-parameter>
-        <!-- The deployment name is the body's model field, FLUX.2-pro when it is
-             left out. Only a plain deployment name is kept, so a client cannot
+        <!-- The deployment name is the body's model field, which Azure requires
+             (without it the backend answers 400 no_model_name; seen on dev,
+             2026-11-14). Only a plain deployment name is kept, so a client cannot
              put arbitrary text into the metric dimension or the usage record;
              anything else is recorded as an empty name and never fails over. -->
         <set-variable name="requestModel" value="@{
             try {
                 var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true);
-                var model = (string)body[&quot;model&quot;] ?? &quot;FLUX.2-pro&quot;;
+                var model = (string)body[&quot;model&quot;] ?? &quot;&quot;;
                 return System.Text.RegularExpressions.Regex.IsMatch(model, &quot;^[A-Za-z0-9._-]{1,64}$&quot;) ? model : &quot;&quot;;
             } catch {
                 return &quot;&quot;;

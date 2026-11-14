@@ -30,6 +30,7 @@
               "schema": {
                 "type": "object",
                 "required": [
+                  "model",
                   "prompt"
                 ],
                 "properties": {
