@@ -11,6 +11,7 @@ param vnetName string
 
 @description('Unique suffix for resource naming, passed from the parent deployment.')
 param uniqueSuffix string
+param tags object = {}
 
 var nsgName = 'nsg-${uniqueSuffix}'
 var routeTableName = 'rt-${uniqueSuffix}'
@@ -18,6 +19,7 @@ var routeTableName = 'rt-${uniqueSuffix}'
 resource routeTable 'Microsoft.Network/routeTables@2023-11-01' = {
   name: routeTableName
   location: location
+  tags: tags
   properties: {
     routes: [
       {
@@ -34,6 +36,7 @@ resource routeTable 'Microsoft.Network/routeTables@2023-11-01' = {
 resource nsg 'Microsoft.Network/networkSecurityGroups@2020-05-01' = {
   name: nsgName
   location: location
+  tags: tags
   properties: {
     securityRules: [
       // Rules for API Management as documented here: https://docs.microsoft.com/en-us/azure/api-management/api-management-using-with-vnet
@@ -239,6 +242,89 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2020-05-01' = {
         }
       }
       {
+        // Allow APIM outbound HTTPS to AI Foundry private endpoints.
+        // Private endpoint IPs (10.0.0.x / 10.1.0.x) fall under the
+        // VirtualNetwork service tag and would otherwise be blocked by
+        // Deny_Lateral_Outbound_VirtualNetwork (priority 4096) below.
+        // This allow rule must sit at a lower priority number than the deny.
+        // Do not remove — without it, all backend traffic hangs silently.
+        name: 'Allow_Outbound_To_Private_Endpoints'
+        properties: {
+          description: 'Allow APIM outbound HTTPS to private endpoints (AI Foundry backends) in the VNet/peered VNets.'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: 'VirtualNetwork'
+          destinationAddressPrefix: 'VirtualNetwork'
+          access: 'Allow'
+          priority: 300
+          direction: 'Outbound'
+        }
+      }
+      {
+        // The inbound rules above (priorities 220/230) only admit this traffic
+        // on the receiving node; the sending node's outbound side must allow
+        // it too, or the lateral deny below drops it. Matters when the service
+        // has more than one unit (Premium); harmless otherwise.
+        name: 'Allow_Outbound_Redis_Cache_Between_Machines'
+        properties: {
+          description: 'Allow APIM nodes to reach each other for cache policies (TCP 6381-6383).'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '6381-6383'
+          sourceAddressPrefix: 'VirtualNetwork'
+          destinationAddressPrefix: 'VirtualNetwork'
+          access: 'Allow'
+          priority: 310
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'Allow_Outbound_Rate_Limit_Counter_Sync_Between_Machines'
+        properties: {
+          description: 'Allow APIM nodes to sync rate-limit counters (UDP 4290).'
+          protocol: 'Udp'
+          sourcePortRange: '*'
+          destinationPortRange: '4290'
+          sourceAddressPrefix: 'VirtualNetwork'
+          destinationAddressPrefix: 'VirtualNetwork'
+          access: 'Allow'
+          priority: 320
+          direction: 'Outbound'
+        }
+      }
+      {
+        // The Event Hub namespace is reached through a private endpoint in the
+        // VNet (modules/event-hub.bicep), so AMQP no longer matches the
+        // EventHub service tag rule above and falls under the lateral deny.
+        name: 'Allow_Outbound_AMQP_To_Private_Endpoints'
+        properties: {
+          description: 'Allow APIM outbound AMQP (TCP 5671-5672) to the Event Hub private endpoint.'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '5671-5672'
+          sourceAddressPrefix: 'VirtualNetwork'
+          destinationAddressPrefix: 'VirtualNetwork'
+          access: 'Allow'
+          priority: 330
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'Deny_Lateral_Outbound_VirtualNetwork'
+        properties: {
+          description: 'Deny outbound lateral management connections from non-management hosts (Azure.NSG.LateralTraversal).'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          destinationAddressPrefix: 'VirtualNetwork'
+          access: 'Deny'
+          priority: 4096
+          direction: 'Outbound'
+        }
+      }
+      {
         name: 'Azure_Infrastructure_Load_Balancer'
         properties: {
           protocol: 'Tcp'
@@ -279,6 +365,7 @@ resource additionalSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01'
       { service: 'Microsoft.ServiceBus' }
       { service: 'Microsoft.AzureActiveDirectory' }
     ]
+    defaultOutboundAccess: false
   }
 }
 

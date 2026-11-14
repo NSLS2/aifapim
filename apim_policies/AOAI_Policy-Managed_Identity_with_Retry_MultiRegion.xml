@@ -7,14 +7,65 @@
               __ALLOWED_CLIENT_IPS__
         </ip-filter>
         <base />
+        <!-- Who is calling. A keyed request is named by its subscription. A keyless request
+             came through the open product (Product_EntraOpen_Policy.xml), whose policy has
+             validated the token and set callerId (the object id, which is also how personal
+             subscriptions are named) and callerName. The token limit counter, the metric
+             dimensions and the usage record read these two variables, never the
+             subscription directly: context.Subscription is null without a key. -->
+        <set-variable name="usageId" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerId&quot;, &quot;&quot;) : context.Subscription.Id)" />
+        <set-variable name="usageName" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerName&quot;, &quot;&quot;) : context.Subscription.Name)" />
+        <!-- Image requests per caller. Images carry no tokens, so the token limit does
+             not cover them. One counter per caller (usageId) is shared by every image
+             route of the gateway (the counter key is the same in all four image
+             policies), so a caller cannot multiply the limit by switching APIs.
+             The limit is filled in by aifapim.bicep
+             (imageRequestsPerMinute). It runs before the request body log, so a
+             refused request is not stored. -->
+        <choose>
+            <when condition="@(context.Request.Url.Path.Contains(&quot;/images/&quot;))">
+                <rate-limit-by-key calls="__IMAGE_REQUESTS_PER_MINUTE__" renewal-period="60" counter-key="@(&quot;images:&quot; + (string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+            </when>
+        </choose>
         <!-- Extract the deployment ID from the URL path after '/deployments/' -->
         <set-variable name="deploymentId" value="@(context.Request.Url.Path.Split('/').ElementAtOrDefault(1))" />
+        <!-- Deployment name: the path segment after 'deployments'. Used to decide
+             whether a failover to the secondary region can succeed. -->
+        <set-variable name="deploymentName" value="@{
+            var segs = context.Request.Url.Path.Split('/');
+            for (int i = 0; i &lt; segs.Length - 1; i++) {
+                if (segs[i] == &quot;deployments&quot;) { return segs[i + 1]; }
+            }
+            return &quot;&quot;;
+        }" />
+        <!-- __REQUEST_LOG__ -->
+        <!-- Fail over to the secondary region only for models deployed there.
+             aifapim.bicep fills in the model list below at deploy time, as
+             '|name|name|...' from modelDeployments[0]. The placeholder is
+             replaced everywhere it appears, so it must stay out of comments.
+             Model listing and retrieval requests (GET .../models and
+             .../models/{id}) carry no model name here, so canFailover is
+             false for them on purpose: each region lists only its own
+             models, so a failover would return the secondary's shorter list
+             and clients would think the primary-only models had gone. A
+             connection reset or 5xx on those routes is retried on the
+             primary instead. -->
+        <set-variable name="canFailover" value="@{
+            var model = (string)context.Variables.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;);
+            return model.Length &gt; 0 &amp;&amp; &quot;__SECONDARY_MODELS__&quot;.Contains(&quot;|&quot; + model + &quot;|&quot;);
+        }" />
+        <!-- Image requests (paths containing /images/) carry no token usage:
+             the token limit and token metric policies are built for text and
+             are skipped for them. Image requests are counted in outbound. -->
+        <set-variable name="isImageRequest" value="@(context.Request.Url.Path.Contains(&quot;/images/&quot;))" />
+        <choose>
+            <when condition="@(!context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;isImageRequest&quot;, false))">
         <!-- Emit token metrics with the deployment ID as a dimension -->
-        <azure-openai-token-limit tokens-per-minute="10000000" counter-key="@(context.Subscription.Id)" estimate-prompt-tokens="true" tokens-consumed-header-name="consumed-tokens" remaining-tokens-header-name="remaining-tokens" />
+        <azure-openai-token-limit tokens-per-minute="10000000" counter-key="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" estimate-prompt-tokens="true" tokens-consumed-header-name="consumed-tokens" remaining-tokens-header-name="remaining-tokens" />
         <azure-openai-emit-token-metric>
             <dimension name="API ID" />
-            <dimension name="Subscription ID" />
-            <dimension name="Subscription Name" value="@(context.Subscription.Name)" />
+            <dimension name="Subscription ID" value="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+            <dimension name="Subscription Name" value="@((string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;))" />
             <dimension name="User ID" />
             <dimension name="Product ID" />
             <!-- Model dimension: AOAI clients pass the deployment name in the URL
@@ -23,13 +74,20 @@
             <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;deploymentId&quot;, &quot;&quot;))" />
             <dimension name="X-Forwarded-For" value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress))" />
         </azure-openai-emit-token-metric>
+            </when>
+        </choose>
         <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
     </inbound>
     <backend>
-        <retry condition="@(context.Response.StatusCode == 404 || context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="5" interval="1" delta="1" max-interval="8" first-fast-retry="false">
+        <!-- 404 is not retried: it means the deployment does not exist, so the
+             backend response is returned to the client unchanged. Failover to
+             the secondary backend happens only when canFailover is set (the
+             model is deployed in the secondary region); otherwise the retry
+             goes back to the current backend. -->
+        <retry condition="@(context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="5" interval="1" delta="1" max-interval="8" first-fast-retry="false">
             <!-- Failover logic below - uncomment to retry on secondary backend -->
             <choose>
-                <when condition="@(context.Response.StatusCode == 404 || context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)">
+                <when condition="@((context.Response.StatusCode == 429 || context.Response.StatusCode >= 500) &amp;&amp; context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;canFailover&quot;, false))">
                     <set-backend-service backend-id="aoai-secondary-backend" />
                 </when>
             </choose>
@@ -38,6 +96,29 @@
     </backend>
     <outbound>
         <base />
+        <!-- Count generated images per model. Successful image requests only;
+             the value is the number of images in the response data. -->
+        <choose>
+            <when condition="@(context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;isImageRequest&quot;, false) &amp;&amp; context.Response.StatusCode == 200)">
+                <emit-metric name="Image Count" value="@{
+                    try {
+                        var body = context.Response.Body.As&lt;JObject&gt;(preserveContent: true);
+                        var data = body[&quot;data&quot;] as JArray;
+                        return data != null ? (double)data.Count : 1.0;
+                    } catch {
+                        return 1.0;
+                    }
+                }" namespace="__METRIC_NAMESPACE__">
+                    <dimension name="API ID" />
+                    <dimension name="Subscription ID" value="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+                    <dimension name="Subscription Name" value="@((string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;))" />
+                    <dimension name="User ID" />
+                    <dimension name="Product ID" />
+                    <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;))" />
+                    <dimension name="X-Forwarded-For" value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress))" />
+                </emit-metric>
+            </when>
+        </choose>
     </outbound>
     <on-error>
         <base />

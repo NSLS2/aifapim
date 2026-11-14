@@ -29,7 +29,10 @@ resource deployments 'Microsoft.CognitiveServices/accounts/deployments@2025-10-0
   name: deployment.name
   sku: {
     name: deployment.skuName
-    capacity: deployment.?capacity ?? ((contains(deployment, 'format') && deployment.format == 'Anthropic') ? anthropicCapacity : openaiCapacity)
+    // Formats other than OpenAI and Anthropic (for example 'Black Forest Labs')
+    // have no default: their quota is counted in different units, so the entry
+    // must set `capacity` itself and the deployment fails if it does not.
+    capacity: deployment.?capacity ?? ((deployment.?format ?? 'OpenAI') == 'Anthropic' ? anthropicCapacity : ((deployment.?format ?? 'OpenAI') == 'OpenAI' ? openaiCapacity : deployment.capacity))
   }
   properties: union(
     {
@@ -46,6 +49,14 @@ resource deployments 'Microsoft.CognitiveServices/accounts/deployments@2025-10-0
         countryCode: anthropicCountryCode
         organizationName: anthropicOrganizationName
       }
+    } : {},
+    ((startsWith(deployment.model, 'gpt-') || deployment.model == 'model-router') && contains(deployment, 'raiPolicyName')) ? {
+      raiPolicyName: deployment.raiPolicyName
+    } : {},
+    // Model router only: { mode, models: [{ format, name, version }] }. The
+    // models are the ones it may pick; leave it out for the default set.
+    deployment.model == 'model-router' && contains(deployment, 'routing') ? {
+      routing: deployment.routing
     } : {}
   )
 }]

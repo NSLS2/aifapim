@@ -15,12 +15,14 @@ __azurite_db*__.json
 aifapim.json
 aifapim.example.json
 llm-token-usage-workbook.json
+llm-token-usage-workbook.example.json
 
 # Logs and editor/tool caches
 tmux-*.log
 *.log
 .opencode/
 .mypy_cache/
+.pixi/
 
 # Environment-specific parameter files — copy from aifapim.example.bicepparam,
 # fill in real values, and keep them out of the public repo. The committed

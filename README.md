@@ -15,15 +15,18 @@ notice.
 
 ## Usage
 
-You can call models deployed behind APIM using standard OpenAI and Anthropic Python SDKs.
+You can call models deployed behind APIM using standard OpenAI and
+Anthropic Python SDKs.
 
 ### Prerequisites
 
 - Python 3.8+
-- `pip install "openai>=1.66.0" anthropic rich` — `openai>=1.66.0` is required
-  for the v1 Responses API example; earlier versions suffice for Chat Completions only
+- `pip install "openai>=1.66.0" anthropic rich` — `openai>=1.66.0` is
+  required for the v1 Responses API example; earlier versions suffice for
+  Chat Completions only
 - Set your APIM subscription key: `export AIFAPIM_API_KEY=...`
-- The gateway supports HTTP/2; clients using `httpx` need `pip install httpx[h2]` and `http2=True` to negotiate it.
+- The gateway supports HTTP/2; clients using `httpx` need
+  `pip install httpx[h2]` and `http2=True` to negotiate it.
 
 ### Example: Query OpenAI-compatible model (GPT, Llama, etc.)
 
@@ -65,7 +68,7 @@ from anthropic import Anthropic
 import os
 
 endpoint = f"https://{os.environ['AIFAPIM_HOST']}"
-deployment_name = "claude-sonnet-4-5"  # or any deployed Claude model
+deployment_name = "claude-sonnet-5-5"  # or any deployed Claude model
 api_key = os.environ["AIFAPIM_API_KEY"]
 
 client = Anthropic(
@@ -113,6 +116,139 @@ response = client.responses.create(
 print(response.output[0].content[0].text)
 ```
 
+### Example: Create or edit an image (FLUX)
+
+The Black Forest Labs FLUX models are deployed as `DataZoneStandard`, so
+prompts and images are processed within the US data zone. Images come back
+base64-encoded in `data[].b64_json`, as PNG or JPEG (`FLUX-1.1-pro` returns
+JPEG), so check the first bytes rather than assuming a format. What works
+through the gateway, tested on prod:
+
+| Model | Create | Edit |
+| --- | --- | --- |
+| `FLUX-1.1-pro` | yes | no |
+| `FLUX.1-Kontext-pro` | yes | yes |
+| `FLUX.2-pro` | yes, provider route | yes, provider route |
+
+- **Create:** `POST /openai/v1/images/generations?api-version=preview` with a
+  JSON body (`model`, `prompt`, `size`, `n`). `FLUX-1.1-pro` accepts a width
+  and height of up to 1440.
+- **Edit:** `POST /deployments/FLUX.1-Kontext-pro/images/edits` with
+  `api-version=2025-04-01-preview` (no other version works) and a multipart
+  form of `image` and `prompt`. Do not send `n`: it is rejected. The v1 route
+  `/openai/v1/images/edits` fails with "Model not supported with Responses
+  API", so the OpenAI SDK's `images.edit` does not work against it.
+- **`FLUX.2-pro`** is served by Azure only on Black Forest Labs' provider
+  route, so the gateway has a separate API for it:
+  `POST /providers/blackforestlabs/v1/flux-2-pro` (the path Azure uses, on the
+  gateway host). Send JSON with `model` (`FLUX.2-pro`), `prompt`, `width`,
+  `height` and `output_format`; for editing add `input_image` (and
+  `input_image_2` and so on, up to eight) as base64, not URLs. The response is
+  synchronous, with the image in `data[0].b64_json`. `api-version` defaults to
+  `preview`. A width and height up to 4 MP are accepted by the model; see
+  [Black Forest Labs](https://docs.bfl.ai/flux_2/flux2_text_to_image) for the
+  other parameters.
+
+```python
+import base64
+import os
+
+import requests
+from openai import OpenAI
+
+endpoint = f"https://{os.environ['AIFAPIM_HOST']}"
+headers = {"x-api-key": os.environ["AIFAPIM_API_KEY"]}
+
+client = OpenAI(
+    base_url=f"{endpoint}/openai/v1/",
+    api_key="placeholder",
+    default_headers=headers,
+    default_query={"api-version": "preview"},
+)
+
+result = client.images.generate(
+    model="FLUX.1-Kontext-pro",
+    prompt="A calm abstract illustration of teal light beams, no text",
+    size="1024x1024",
+)
+image = base64.b64decode(result.data[0].b64_json)
+
+response = requests.post(
+    f"{endpoint}/deployments/FLUX.1-Kontext-pro/images/edits",
+    params={"api-version": "2025-04-01-preview"},
+    headers=headers,
+    files={"image": ("in.png", image, "image/png")},
+    data={"prompt": "Change the beams to amber, keep everything else the same"},
+    timeout=180,
+)
+response.raise_for_status()
+edited = base64.b64decode(response.json()["data"][0]["b64_json"])
+
+response = requests.post(
+    f"{endpoint}/providers/blackforestlabs/v1/flux-2-pro",
+    headers=headers,
+    json={
+        "model": "FLUX.2-pro",
+        "prompt": "A calm abstract illustration of teal light beams, no text",
+        "width": 1024,
+        "height": 1024,
+        "output_format": "png",
+    },
+    timeout=180,
+)
+response.raise_for_status()
+flux2 = base64.b64decode(response.json()["data"][0]["b64_json"])
+```
+
+Image models are billed and limited per image, not per token: the token
+limit and token metric policies are skipped for `/images/` requests, and the
+policies emit an `Image Count` metric instead (same namespace and dimensions
+as the token metrics). They are not listed in `GET /catalog`, which holds
+chat models only. `GET /catalog/images` lists them, and
+`GET /catalog/embeddings` lists the embedding models. Each image entry gives
+the gateway route to use, because the routes differ between model families.
+
+### Example: MAI and GPT image models
+
+`MAI-Image-2.6` and `MAI-Image-2.6-Flash` use Microsoft's MAI routes, on the
+gateway at the path Azure uses: `POST /mai/v1/images/generations` (JSON with
+`model`, `prompt`, `width`, `height`) and `POST /mai/v1/images/edits` (multipart
+with `model`, `prompt` and up to five `image` files). Both return one PNG in
+`data[0].b64_json`. Width and height are at least 768, with a total of at most
+2,359,296 pixels. `web_grounding: true` is refused with HTTP 400, because it
+sends the prompt to Bing. These are `GlobalStandard` deployments, so prompts
+may be processed outside the US.
+
+`gpt-image-2.5-flare` (fast) and `gpt-image-2.5-sunburst` (best for precise
+edits) use the OpenAI v1 routes, `/openai/v1/images/generations` and
+`/openai/v1/images/edits` with `api-version=preview`, like the FLUX models, and
+are also `GlobalStandard`. The `gpt-image` models are billed by token, so the
+quality setting affects the cost.
+
+```python
+import base64
+import os
+
+import requests
+
+endpoint = f"https://{os.environ['AIFAPIM_HOST']}"
+headers = {"x-api-key": os.environ["AIFAPIM_API_KEY"]}
+
+response = requests.post(
+    f"{endpoint}/mai/v1/images/generations",
+    headers=headers,
+    json={
+        "model": "MAI-Image-2.6",
+        "prompt": "A calm abstract illustration of teal light beams, no text",
+        "width": 1024,
+        "height": 1024,
+    },
+    timeout=180,
+)
+response.raise_for_status()
+png = base64.b64decode(response.json()["data"][0]["b64_json"])
+```
+
 ### Example: OpenCode configuration
 
 The `examples/opencode.json` file contains a ready-to-use
@@ -155,23 +291,33 @@ by changing a single environment variable.
 For the full OpenCode configuration reference, see the
 [OpenCode config docs](https://opencode.ai/docs/config/).
 
-See `examples/test-apim.py` for a full script with Markdown rendering and more advanced usage.
+See `examples/test-apim.py` for a full script with Markdown rendering and
+more advanced usage.
 
 ## Architecture
 
 ![Architecture Diagram](diagrams/arch.svg)
 
-- **Multi-region**: Two AI Foundry accounts with private endpoints in separate VNets, peered together.
-- **Private networking**: AI Foundry endpoints are disabled for public access; APIM reaches them via private endpoints and shared private DNS zones.
-- **Managed Identity auth**: APIM authenticates to AI Foundry using its system-assigned managed identity (Azure AI User / Cognitive Services OpenAI User roles).
-- **Custom domains**: APIM gateway uses TLS certificates from Azure Key Vault (RBAC-based), with InCommon CA certificates in the trust store.
-- **Retry & failover**: Automatic retry and failover from primary to secondary region.
+- **Multi-region**: Two AI Foundry accounts with private endpoints in
+  separate VNets, peered together.
+- **Private networking**: AI Foundry endpoints are disabled for public
+  access; APIM reaches them via private endpoints and shared private DNS
+  zones.
+- **Managed Identity auth**: APIM authenticates to AI Foundry using its
+  system-assigned managed identity (Azure AI User / Cognitive Services
+  OpenAI User roles).
+- **Custom domains**: APIM gateway uses TLS certificates from Azure Key
+  Vault (RBAC-based), with InCommon CA certificates in the trust store.
+- **Retry & failover**: Automatic retry and failover from primary to
+  secondary region.
 
-## Prerequisites
+## Deployment Prerequisites
 
 - Azure CLI (`az`) with Bicep support
-- A subscription with permissions to create Cognitive Services, APIM, VNets, and role assignments
-- For custom domains: a Key Vault (RBAC-enabled) with PFX certificates stored as secrets
+- A subscription with permissions to create Cognitive Services, APIM,
+  VNets, and role assignments
+- For custom domains: a Key Vault (RBAC-enabled) with PFX certificates
+  stored as secrets
 
 ## Deployment
 
@@ -189,7 +335,9 @@ $EDITOR aifapim-prod.bicepparam   # fill in your values
 The example file is fully commented; each parameter explains its purpose,
 valid values, and any gotchas. Pay particular attention to `allowedClientIps`
 (the inbound IP allow-list — RFC 5737 documentation IPs in the example will
-not allow real traffic) and the `regions` / `modelDeployments` arrays.
+not allow real traffic), the `regions` / `modelDeployments` arrays, and
+`catalogJson` (the example loads `model-catalog.example.json`; point it at a
+catalog that matches your deployments).
 
 ### Deploy everything (AI Foundry + APIM)
 
@@ -216,18 +364,30 @@ blocks in [`aifapim.bicep`](aifapim.bicep).
 Pay particular attention to:
 
 - `allowedClientIps` — required (`@minLength(1)`); the inbound IP allow-list
-  applied to all three APIM APIs. The example file ships RFC 5737
+  applied to all the inference APIs. The example file ships RFC 5737
   documentation IPs that cannot route real traffic; replace them.
 - `regions` and `modelDeployments` — nested arrays; outer indices of
   `modelDeployments` must align with `regions[*]`.
-- `apimProductName` — the APIM product all three APIs are grouped under, and
-  the App Insights custom-metric namespace.
+- `apimProductName` — the APIM product the five inference APIs (and the
+  catalog API) are grouped under, and the App Insights custom-metric namespace.
+- `serviceProducts` — optional extra products for service keys, each
+  `{ name, displayName, description, allowedClientIps?, entraAuth? }` with the
+  same four APIs. `allowedClientIps` locks a product to those callers (a CIDR
+  covers its whole range) on top of the global list. `entraAuth`
+  (`{ tenantId, audience, role }`) makes the product need a Microsoft Entra ID
+  app-only token as well as the key (see "Authentication model"). `open: true`
+  makes it the open product for people: no key, a person's Microsoft Entra ID
+  token alone; services still need key and token (see
+  "Open product: Entra token, no key"). See `AGENTS.md` "Products".
+- `usageTrace` — optional; writes one Application Insights trace per request to
+  the five inference APIs that names the caller. Needed for the open product.
 
 ## Repository Structure
 
 ```text
 aifapim.bicep                   # Main deployment orchestrator
 aifapim.example.bicepparam      # Parameter file template — copy and customize per environment
+model-catalog.example.json      # Example GET /catalog body, loaded by the example parameter file
 llm-token-usage-workbook.bicep  # Azure Monitor workbook for LLM token usage analytics
 modules/
   aif.bicep                     # AI Foundry (AIServices) account + private endpoint
@@ -236,22 +396,34 @@ modules/
   api.bicep                     # API definitions, backends, product, diagnostics
   app-insights.bicep            # Application Insights
   cognitive-services-role.bicep # Cognitive Services / AI User RBAC for APIM system identity
-  event-hub.bicep               # Event Hub for APIM logging
+  event-hub.bicep               # Event Hub namespace (private endpoint only; not wired to an APIM logger yet)
   keyvault-role.bicep           # Key Vault RBAC for APIM user-assigned identity
   llm-latency-alerts.bicep      # Scheduled-query latency alerts on ApiManagementGatewayLogs
   log-analytics-workspace.bicep # Log Analytics workspace
   network.bicep                 # APIM subnet
-  private-dns-zone.bicep        # Private DNS zone for AI Foundry endpoints
+  private-dns-zone.bicep        # Private DNS zone (AI Foundry endpoints, Event Hub, request log storage)
+  request-log.bicep             # Request body log wrapper (optional)
+  request-log-storage.bicep     # WORM storage account for request bodies
+  request-log-function.bicep    # Loader function app, private subnet, Event Grid, roles
+  request-log-ampls.bicep       # Azure Monitor private link scope and private endpoint
+  request-log-workspace.bicep   # Prompts workspace, custom table, DCE and DCR
   role.bicep                    # Generic role-assignment helper
+  storage-private-endpoint.bicep # Private endpoint for a storage account
   vnet.bicep                    # Virtual network
 apim_policies/
   AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml       # AOAI multi-region with failover
   OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml  # AOAI v1 Messages multi-region with failover
   Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml  # Anthropic multi-region with failover
+  BlackForestLabs_Policy-Managed_Identity_with_Retry_MultiRegion.xml  # FLUX.2-pro provider route with failover
+  MAI_Image_Policy-Managed_Identity_with_Retry.xml  # MAI image routes, one backend
+  Catalog_Policy.xml                                             # Static return-response; no backend
 api_definitions/
   AzureOpenAI_inference_2024-10-21.yaml  # AOAI data-plane inference spec; vendored from azure-rest-api-specs
   AzureOpenAI_v1_Messages_OpenAPI.json   # AOAI v1 Messages OpenAPI spec imported into APIM
   AzureAnthropic_OpenAPI.json            # Anthropic OpenAPI spec imported into APIM
+  BlackForestLabs_OpenAPI.json           # FLUX.2-pro (Black Forest Labs route) OpenAPI spec
+  MAI_Image_OpenAPI.json                 # MAI image OpenAPI spec
+  Catalog_OpenAPI.json                   # GET /catalog, /catalog/images and /catalog/embeddings static model lists
 resources/                       # User-supplied CA PEMs loaded via loadTextContent
                                  # in the bicepparam file. Directory is gitignored
                                  # aside from a .gitkeep; see "Custom Domains & TLS".
@@ -272,15 +444,37 @@ All policies include:
   excluded). Typical contents are your client network range plus any
   provider-side egress IPs you need to allow (for example, the Anthropic
   egress IPs needed for `/anthropic/*` traffic on Foundry).
-- **Managed Identity auth**: APIM authenticates to AI Foundry backends using its system-assigned identity
-- **Retry & failover**: Retry on `404`, `429`, and `5xx`; on persistent failure, fail over from the primary backend to the secondary backend in the other region.
+
+The five **inference** policies (`AOAI`, `OpenAIv1Messages`, `Anthropic`,
+`BlackForestLabs`, `MAI_Image`) additionally include:
+
+- **Managed Identity auth**: APIM authenticates to AI Foundry backends
+  using its system-assigned identity
+- **Retry & failover**: Retry on `429` and `5xx` responses and on backend
+  connection failures (the gateway logs show a reset connection being
+  retried). Failover from the primary backend to the secondary backend in
+  the other region happens only for models deployed in the secondary region
+  (the `__SECONDARY_MODELS__` sentinel, built from `modelDeployments[0]`);
+  other models, such as the Claude models that exist only in `eastus2`,
+  retry against the primary. Model listing and retrieval requests never fail
+  over: they carry no model name, and each region lists only its own
+  models. A `404` means the deployment does not exist and is returned to the
+  client unchanged.
 - **Token metrics**: Each LLM API policy emits per-request token metrics to
   Application Insights via `<llm-emit-token-metric>` (or the AOAI-specific
   `<azure-openai-emit-token-metric>` variant) with dimensions for API ID,
   Subscription ID, User ID, Product ID, and Model. The metric namespace is
   the configured `apimProductName`, substituted into the policy XML at deploy
   time via the `__METRIC_NAMESPACE__` sentinel. See **Token Usage Analytics**
-  below.
+  below. Requests whose path contains `/images/` skip the token limit and
+  token metric policies (they carry no tokens) and emit an `Image Count`
+  metric on success instead.
+
+The **catalog** policy (`Catalog_Policy.xml`) uses `<return-response>` in
+`<inbound>` — no backend is contacted, so managed identity auth, retry, and
+token metrics do not apply. The catalog JSON body is baked in at deploy time
+via the `__CATALOG_JSON__` sentinel (XML-escaped by `aifapim.bicep`; the
+sentinel must appear only in `<set-body>`, never in a comment).
 
 ### Authentication model
 
@@ -293,17 +487,98 @@ Authentication is two-hop and intentionally asymmetric:
   passed via the `x-api-key` header, gated by the `allowedClientIps` IP allow-
   list described above.
 
-Entra ID token validation (`<validate-azure-ad-token>`) is **intentionally not
-configured** on any of the three APIM policies. Adding it on top of the
-subscription-key flow would require every caller (interactive users, batch
-jobs, OpenCode, the `examples/test-apim.py` smoke test) to also acquire an
-AAD token for an APIM-fronting app registration — none of those flows are
-wired up today. If dual-factor auth is ever required, plan to (1) register
-and grant scopes for an APIM-fronting Entra app, (2) decide how non-
-interactive callers obtain tokens (workload identity / device-code / client
-credentials), (3) update the example clients to acquire and forward those
-tokens, and (4) only then add
-`<validate-azure-ad-token>` blocks to the policy XMLs.
+**Key and Entra token (optional, per product).** The inference API policies
+do not check an Entra ID token, so a plain key works as before. A service
+product can ask for one on top of the key: give its entry in `serviceProducts`
+an `entraAuth` setting (`{ tenantId, audience, role }`). The gateway then builds
+that product's policy from `apim_policies/Product_EntraAuth_Policy.xml`, which
+runs `<validate-azure-ad-token>` and requires:
+
+- **both credentials.** The key still comes first: a call with no valid key is
+  refused by the API, and a call with a key but no valid token gets HTTP 401.
+  The token is sent as `Authorization: Bearer <token>`, the key as `x-api-key`.
+- **a token for this gateway**: signed by the tenant, not expired, issued for
+  `audience` (for a v2 token, the client ID of the Entra app that represents
+  the gateway) and holding the app role `role`.
+- **an app-only token obtained with a certificate** (`idtyp` is `app`, `azpacr`
+  is `2`), so a person's token or one got with a client secret is refused.
+
+No list of client apps is kept in the gateway: which apps hold the role is set
+in Entra ID, so adding a caller is not a gateway deployment. The token is not
+tied to the key it is sent with. The key still identifies the caller for the
+token limit, the metrics and the request log. On the way to the models APIM
+replaces the `Authorization` header with its managed-identity token, so the
+caller's token never reaches them.
+
+A client library that sends its API key as `Authorization: Bearer` (the OpenAI
+SDK does) must replace that header with the Entra token. The tenant, audience
+and role are not secrets, but keep the real values out of this public
+repository: set them in the environment's own parameter file, and use the
+placeholders in `aifapim.example.bicepparam`.
+
+Without `entraAuth` nothing changes. Entra ID token validation is not applied
+to the user product or to the other service products.
+
+### Open product: Entra token, no key
+
+One entry of `serviceProducts` can set `open: true`. Callers of that product
+send no subscription key, only `Authorization: Bearer <token>`. The product's
+policy, `apim_policies/Product_EntraOpen_Policy.xml`, is then the only access
+check, and accepts people only:
+
+- **A person**: a delegated token for this gateway whose `scp` claim holds
+  `entraAuth.scope` and whose `roles` claim holds `entraAuth.userRole` (an app
+  role assigned to the person, or to a group they are in, in Entra ID).
+  `entraAuth.clientApplicationIds` (optional) limits which client apps may ask
+  for a person's token.
+- **Not a service principal.** An app-only token is refused with HTTP 403
+  (`KeyRequired`). A service calls with its subscription key and its token
+  through a key-and-token product, so switching its key off always stops it.
+  Without the key, or with a key that is not valid, APIM would send it here.
+
+Things to know:
+
+- **It needs all of `tenantId`, `audience`, `scope` and `userRole`**
+  (`role` is not used). With less, or with no `entraAuth`, the product renders a
+  policy that answers every request with HTTP 503, never an
+  inheritance-only policy, which would leave the product open to anyone.
+- **An API can be in only one open product.** The API policies still say a
+  subscription is required; per the APIM documentation a request with no key
+  (or a key that is not valid) is handled in the open product, and a request
+  with a valid key is handled in the key's own product as before.
+- **The caller is the token's `oid`** (the object id of the person or service
+  principal), which is also how personal subscriptions are named. The API
+  policies read the caller from two variables, `usageId` and `usageName`, which
+  are the subscription's id and name for a keyed request and the token's `oid`
+  and display name for a keyless one. The token limit counter, the
+  `Subscription ID` and `Subscription Name` metric dimensions and the request
+  body log use them, so a person has one limit and one metric series however
+  they authenticate.
+- **The caller's token is dropped** (`Authorization` is deleted) once it has
+  been validated, so it never reaches the models.
+- **Usage per caller** comes from the usage trace (`usageTrace = true`): one
+  `AppTraces` row per request with the caller, request id, API, product and
+  model. Join it to `ApiManagementGatewayLlmLog` on `CorrelationId` for tokens
+  (Anthropic completion tokens are not measured for streamed requests, as for
+  keys). A keyless request has no subscription, so the gateway log alone cannot
+  name the caller.
+  The log holds several rows per request (extra rows with zero tokens), so count
+  requests with `dcount(RequestId)`, not `count()`.
+
+  ```kusto
+  AppTraces
+  | where TimeGenerated > ago(1d) and isnotempty(tostring(Properties.CallerType))
+  | extend RequestId = tostring(Properties.RequestId), Caller = tostring(Properties.CallerId)
+  | join kind=inner (ApiManagementGatewayLlmLog | where TimeGenerated > ago(1d)) on $left.RequestId == $right.CorrelationId
+  | summarize Requests = dcount(RequestId), PromptTokens = sum(PromptTokens), CompletionTokens = sum(CompletionTokens) by Caller, CallerName = tostring(Properties.CallerName), CallerType = tostring(Properties.CallerType)
+  ```
+
+- **Who may get a token** is decided in Entra ID: expose the delegated scope on
+  the gateway API app and a user app role, pre-authorize the client apps, assign
+  the role to the intended groups, and set "Assignment required" on the
+  enterprise application so only they receive a token. The gateway checks the
+  role as well, so widening access later is a role assignment, not a gateway
+  deployment. Nothing here lists users.
 
 ## Token Usage Analytics
 
@@ -326,12 +601,12 @@ component connected to the APIM service:
 
 ### Source comparison
 
-| Field                      | AOAI in `LlmLog`                                | Anthropic in `LlmLog`     | Anthropic in `AppMetrics`                                  |
-|----------------------------|-------------------------------------------------|---------------------------|------------------------------------------------------------|
-| Prompt tokens              | populated                                       | populated                 | populated (`Prompt Tokens` via `<llm-emit-token-metric>`)  |
-| Completion tokens          | populated only when client sets `stream_options.include_usage=true` | **always 0** (streaming and non-streaming) | non-streaming: populated (`Anthropic Completion Tokens` from `<outbound>` policy). streaming: **unmeasurable** (SSE body cannot be parsed in `<outbound>`) |
-| `ModelName` / `Model`      | populated on most streaming rows (~12/15 sample)| **always empty** (0/194)  | populated under `Properties.Model`                         |
-| `DeploymentName`           | populated                                       | populated                 | (in `Properties.Model`)                                    |
+| Field | AOAI in `LlmLog` | Anthropic in `LlmLog` | Anthropic in `AppMetrics` |
+| --- | --- | --- | --- |
+| Prompt tokens | populated | populated | populated (`Prompt Tokens` via `<llm-emit-token-metric>`) |
+| Completion tokens | populated only when client sets `stream_options.include_usage=true` | **always 0** (streaming and non-streaming) | non-streaming: populated (`Anthropic Completion Tokens` from `<outbound>` policy). streaming: **unmeasurable** (SSE body cannot be parsed in `<outbound>`) |
+| `ModelName` / `Model` | populated on most streaming rows (~12/15 sample) | **always empty** (0/194) | populated under `Properties.Model` |
+| `DeploymentName` | populated | populated | (in `Properties.Model`) |
 
 ### Per-subscription Anthropic token usage (last 7 days)
 
@@ -397,54 +672,31 @@ it is always 0.
 
 ### Azure Monitor Workbook
 
-A pre-built workbook is available for visualizing LLM token usage with proper
-Model dimension support. Deploy it independently:
+The maintained workbook lives in the **`aifapim-config` repo**
+(`llm-token-usage-workbook.bicep`). Deploy it from there — see
+`aifapim-config/AGENTS.md` §"Workbook deployment" for the full recipe.
 
-```bash
-RG=<resource-group>
+The canonical workbook includes:
 
-AI_ID=$(az resource list -g "$RG" \
-  --resource-type Microsoft.Insights/components \
-  --query "[?starts_with(name, 'appIn-')].id | [0]" -o tsv)
-
-LAW_ID=$(az resource list -g "$RG" \
-  --resource-type Microsoft.OperationalInsights/workspaces \
-  --query "[?starts_with(name, 'law-')].id | [0]" -o tsv)
-
-az deployment group create \
-  -g "$RG" \
-  -f llm-token-usage-workbook.bicep \
-  -p applicationInsightsId="$AI_ID" logAnalyticsWorkspaceId="$LAW_ID"
-```
-
-The `appIn-<unique>` / `law-<unique>` prefixes are deterministic (set by
-`uniqueString(resourceGroup().id, subscription().id)` in `aifapim.bicep`), so the
-JMESPath filters resolve to a single ID in each environment. Verify post-deploy
-that the right workspace was wired with
-`az deployment group show -g "$RG" -n <deployment-name> --query properties.outputs`
-— the template echoes both inputs as `applicationInsightsIdEcho` and
-`logAnalyticsWorkspaceIdEcho`.
-
-Two parameters because `AppMetrics` is a workspace-scoped table: the workbook is
-associated with the App Insights component (so it surfaces in the AI Workbooks
-blade) but each query targets the Log Analytics workspace directly via
-`crossComponentResources`. The App Insights component query scope cannot resolve
-`AppMetrics` on its own.
-
-After deployment, find the workbook in:
-**Azure Portal → Application Insights → Workbooks → "LLM Token Usage"**
-
-The workbook includes:
 - Summary tiles (total prompt/completion/total tokens)
-- Token usage by API
-- Token usage by Model (sourced from `AppMetrics` where Model is populated)
-- Token usage by APIM Subscription (for billing)
-- Token usage over time (trend chart)
+- Token usage by API, Model, and APIM Subscription
+- Token usage over time (per subscription)
+- Cost analytics tiles (per-model and per-subscription cost from Cost Management)
+- Optional non-owner read access via an Azure AD group (Monitoring Reader)
 
-This workbook reads from `AppMetrics` rather than `ApiManagementGatewayLlmLog`
-because the latter has empty `ModelName` for Anthropic streaming on classic-
-tier APIM, and `CompletionTokens=0` for all Anthropic rows (streaming and
-non-streaming).
+This repo retains `llm-token-usage-workbook.example.bicep` as a **reference
+snapshot** of the workbook as it stood before the move to `aifapim-config`. It is
+not deployed as part of this repo and will diverge from the canonical version as
+new features are added. Do not run `az deployment group create` against the example
+file — use the canonical in `aifapim-config` instead.
+
+> **Drift warning**: the 2026-06 incident (commit `b0c4b86`) was caused by
+> deploying a stale workbook copy to prod while a newer version was in dev.
+> Always deploy from the single canonical source in `aifapim-config`.
+
+The workbook reads from `AppMetrics` rather than `ApiManagementGatewayLlmLog`
+because the latter has empty `ModelName` for Anthropic streaming on classic-tier
+APIM, and `CompletionTokens=0` for all Anthropic rows (streaming and non-streaming).
 
 ### Platform behaviors observed on classic-tier APIM (Developer SKU)
 
@@ -472,6 +724,10 @@ Management v2 tiers":
    emits it as a dimension).
 4. **AOAI streaming `ModelName` is empty on a subset of rows**, correlating
    with whether the client requested `stream_options.include_usage=true`.
+5. **Anthropic prompts are mostly missing.** When the request's `system`
+   field is a list of content blocks (as Claude Code and OpenCode send), the
+   `LlmLog` row has the response but no prompt. A plain-string `system` is
+   logged. See "Request body log" below.
 
 If accurate per-model token accounting in the unified `LlmLog` table is
 critical for downstream tooling, options are:
@@ -486,11 +742,44 @@ critical for downstream tooling, options are:
 
 [aigw]: https://learn.microsoft.com/en-us/azure/api-management/genai-gateway-capabilities
 
+### Request body log
+
+Because of item 5 above, the stack can optionally keep the raw body of every
+POST to the five inference APIs. Set `requestBodyLogging = true` (and
+`requestLogSubnetIPPrefix`, `requestLogReaderGroupObjectId`) in the parameter
+file. The gateway writes each body to a write-once (WORM) blob named by the
+request id (`CorrelationId` in `ApiManagementGatewayLogs`), and a Flex
+Consumption function loads a searchable copy into a separate Log Analytics
+workspace (`LlmRequestBody_CL`).
+
+- It is off by default. It adds a subnet, two storage accounts with private
+  endpoints, a function app, a workspace, a data collection rule and an Azure
+  Monitor private link scope, and the stored bodies contain whatever users
+  send. There is no NAT gateway: BNL policy denies public IP addresses.
+- The private link scope changes Azure Monitor DNS for the whole `regions[0]`
+  VNet, including the gateway's Application Insights logger (see the
+  `AGENTS.md` note on AMPLS).
+- The immutability policy is created unlocked and locking is a separate,
+  irreversible step. Blobs move Hot to Cold after 7 days and to Archive after
+  90, and are never deleted.
+- The workspace copy is readable by anyone with subscription-level `Reader`.
+- The function code and operator runbook are in the private `aifapim-config`
+  repository (`request-log/`).
+
 ### Foundry-side diagnostics
 
-In addition to the APIM-managed `ApiManagementGatewayLogs` / `ApiManagementGatewayLlmLog` / `AppMetrics` tables, each AI Foundry account also writes its own diagnostic logs to the same Log Analytics workspace by default. This captures traffic that bypasses the gateway (Entra-ID-authenticated direct callers, internal Foundry portal usage) and management-plane events (account/deployment configuration changes).
+In addition to the APIM-managed `ApiManagementGatewayLogs` /
+`ApiManagementGatewayLlmLog` / `AppMetrics` tables, each AI Foundry account
+also writes its own diagnostic logs to the same Log Analytics workspace by
+default. This captures traffic that bypasses the gateway
+(Entra-ID-authenticated direct callers, internal Foundry portal usage) and
+management-plane events (account/deployment configuration changes).
 
-Default-on categories: `Audit`, `AzureOpenAIRequestUsage`, and `AllMetrics`. The verbose `RequestResponse` (full request/response bodies) and `Trace` (internal traces) categories are off by default; flip them on per-deployment via `aifDiagnosticsEnableRequestResponse=true` and `aifDiagnosticsEnableTrace=true` when troubleshooting.
+Default-on categories: `Audit`, `AzureOpenAIRequestUsage`, and `AllMetrics`.
+The verbose `RequestResponse` (full request/response bodies) and `Trace`
+(internal traces) categories are off by default; flip them on per-deployment
+via `aifDiagnosticsEnableRequestResponse=true` and
+`aifDiagnosticsEnableTrace=true` when troubleshooting.
 
 Foundry logs land in `AzureDiagnostics`, distinct from the APIM tables:
 
@@ -538,6 +827,18 @@ singular strings, not arrays.
 
 ### Smoke test via APIM with subscription key
 
+With pixi (reproducible conda env; manifest in `examples/`):
+
+```bash
+export AIFAPIM_HOST=<gateway-hostname>
+export AIFAPIM_API_KEY="<your-key>"
+cd examples && pixi run example
+# or, from the repo root:
+#   pixi run --manifest-path examples/pixi.toml example
+```
+
+Or with a manually-managed Python:
+
 ```bash
 export AIFAPIM_HOST=<gateway-hostname>
 export AIFAPIM_API_KEY="<your-key>"
@@ -548,3 +849,8 @@ python examples/test-apim.py
 
 See `examples/opencode.json` and the [OpenCode configuration](#example-opencode-configuration)
 section above for the full setup.
+
+## AI Disclosure
+
+This repository's contents are largely AI-generated with human
+review. See [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md) for details.

@@ -1,0 +1,100 @@
+---
+# Canonical lint configuration. Runs locally on commit and in CI via
+# the Lint workflow (.github/workflows/lint.yml). Tool versions are
+# pinned in pixi.toml [feature.dev.dependencies] for system hooks and
+# via rev: for upstream pre-commit-managed hooks.
+
+# Node-based hooks (markdownlint) get a pinned Node. Unpinned, nodeenv
+# resolves "latest" to a pre-release such as 27.0.0-alpha.0.0.0, which it
+# cannot parse, and the hook environment fails to build. Keep this on the
+# same major line as nodejs in pixi.toml.
+default_language_version:
+  node: 26.13.0
+
+repos:
+  # ────────────────────────────────────────────────────────────────
+  # Generic hygiene + syntax checks
+  # ────────────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: ["--unsafe"]
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+
+  # ────────────────────────────────────────────────────────────────
+  # Spelling
+  # ────────────────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: codespell
+        name: codespell (pixi dev)
+        language: system
+        entry: pixi run --frozen -e dev codespell
+        types: [text]
+        exclude: '(\.bicepparam|pixi\.lock)$'
+
+  # ────────────────────────────────────────────────────────────────
+  # Markdown
+  # ────────────────────────────────────────────────────────────────
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.48.0
+    hooks:
+      - id: markdownlint
+        name: Markdownlint
+        entry: markdownlint --fix
+
+  # ────────────────────────────────────────────────────────────────
+  # GitHub Actions
+  # ────────────────────────────────────────────────────────────────
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  # ────────────────────────────────────────────────────────────────
+  # Secrets
+  # ────────────────────────────────────────────────────────────────
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # ────────────────────────────────────────────────────────────────
+  # Bicep — native linter (runs az bicep build per file)
+  # Requires: az bicep install (one-time, see README activation steps)
+  # ────────────────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: bicep-build
+        name: bicep build (az)
+        language: system
+        entry: bash -c 'for f in "$@"; do az bicep build --stdout --file "$f" >/dev/null || exit 1; done' --
+        files: '\.bicep$'
+        # Runs the built-in Bicep linter once per file; fails on error-level
+        # rules. ARM JSON (stdout) is discarded — only diagnostics/exit code
+        # matter. The trailing `--` makes pre-commit's filenames land in "$@".
+
+  # ────────────────────────────────────────────────────────────────
+  # PSRule for Azure — manual stage only (opt-in, slow)
+  # Run: pixi run -e dev lint-psrule
+  # Requires: pwsh + PSRule.Rules.Azure module installed on host
+  # ────────────────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: psrule
+        name: PSRule for Azure (manual)
+        language: system
+        stages: [manual]
+        # Assert-PSRule with -ErrorAction Stop exits non-zero when a rule
+        # fails (Invoke-PSRule only returns the results, so the hook would
+        # always pass). -Format File is needed for Bicep expansion.
+        entry: pwsh -NoProfile -Command
+          "Assert-PSRule -Module PSRule.Rules.Azure -Format File
+          -InputPath . -Option ps-rule.yaml -Outcome Fail,Error
+          -ErrorAction Stop"
+        pass_filenames: false

@@ -1,0 +1,98 @@
+<policies>
+    <inbound>
+        <set-backend-service backend-id="bfl-primary-backend" />
+        <!-- The ip-filter allow-list below is substituted at deploy time by
+             aifapim.bicep from the allowedClientIps parameter (see aifapim.bicepparam). -->
+        <ip-filter action="allow">
+              __ALLOWED_CLIENT_IPS__
+        </ip-filter>
+        <base />
+        <!-- Who is calling. A keyed request is named by its subscription. A keyless request
+             came through the open product (Product_EntraOpen_Policy.xml), whose policy has
+             validated the token and set callerId (the object id, which is also how personal
+             subscriptions are named) and callerName. The token limit counter, the metric
+             dimensions and the usage record read these two variables, never the
+             subscription directly: context.Subscription is null without a key. -->
+        <set-variable name="usageId" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerId&quot;, &quot;&quot;) : context.Subscription.Id)" />
+        <set-variable name="usageName" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerName&quot;, &quot;&quot;) : context.Subscription.Name)" />
+        <!-- Image requests per caller. Images carry no tokens, so the token limit does
+             not cover them. One counter per caller (usageId) is shared by every image
+             route of the gateway (the counter key is the same in all four image
+             policies), so a caller cannot multiply the limit by switching APIs.
+             The limit is filled in by aifapim.bicep
+             (imageRequestsPerMinute). It runs before the request body log, so a
+             refused request is not stored. -->
+        <rate-limit-by-key calls="__IMAGE_REQUESTS_PER_MINUTE__" renewal-period="60" counter-key="@(&quot;images:&quot; + (string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+        <set-query-parameter name="api-version" exists-action="skip">
+            <value>preview</value>
+        </set-query-parameter>
+        <!-- The deployment name is the body's model field, which Azure requires
+             (without it the backend answers 400 no_model_name; seen on dev,
+             2026-11-14). Only a plain deployment name is kept, so a client cannot
+             put arbitrary text into the metric dimension or the usage record;
+             anything else is recorded as an empty name and never fails over. -->
+        <set-variable name="requestModel" value="@{
+            try {
+                var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true);
+                var model = (string)body[&quot;model&quot;] ?? &quot;&quot;;
+                return System.Text.RegularExpressions.Regex.IsMatch(model, &quot;^[A-Za-z0-9._-]{1,64}$&quot;) ? model : &quot;&quot;;
+            } catch {
+                return &quot;&quot;;
+            }
+        }" />
+        <!-- __REQUEST_LOG__ -->
+        <!-- Fail over to the secondary region only when the model is deployed
+             there. aifapim.bicep fills in the model list below at deploy time,
+             as '|name|name|...' from modelDeployments[0]. The placeholder is
+             replaced everywhere it appears, so it must stay out of comments. -->
+        <set-variable name="canFailover" value="@{
+            var model = (string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;);
+            return model.Length &gt; 0 &amp;&amp; &quot;__SECONDARY_MODELS__&quot;.Contains(&quot;|&quot; + model + &quot;|&quot;);
+        }" />
+        <!-- Image requests carry no token usage, so there is no token limit or
+             token metric here. They are counted in outbound. -->
+        <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
+    </inbound>
+    <backend>
+        <!-- 404 is not retried: the backend response goes back to the client
+             unchanged. 429 and 5xx are retried, on the secondary backend when
+             the model is deployed there. -->
+        <retry condition="@(context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="5" interval="1" delta="1" max-interval="8" first-fast-retry="false">
+            <choose>
+                <when condition="@((context.Response.StatusCode == 429 || context.Response.StatusCode >= 500) &amp;&amp; context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;canFailover&quot;, false))">
+                    <set-backend-service backend-id="bfl-secondary-backend" />
+                </when>
+            </choose>
+            <forward-request buffer-request-body="true" timeout="__BACKEND_TIMEOUT__" />
+        </retry>
+    </backend>
+    <outbound>
+        <base />
+        <!-- Count generated images. Successful requests only; the value is the
+             number of images in the response data. -->
+        <choose>
+            <when condition="@(context.Response.StatusCode == 200)">
+                <emit-metric name="Image Count" value="@{
+                    try {
+                        var body = context.Response.Body.As&lt;JObject&gt;(preserveContent: true);
+                        var data = body[&quot;data&quot;] as JArray;
+                        return data != null ? (double)data.Count : 1.0;
+                    } catch {
+                        return 1.0;
+                    }
+                }" namespace="__METRIC_NAMESPACE__">
+                    <dimension name="API ID" />
+                    <dimension name="Subscription ID" value="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+                    <dimension name="Subscription Name" value="@((string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;))" />
+                    <dimension name="User ID" />
+                    <dimension name="Product ID" />
+                    <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;))" />
+                    <dimension name="X-Forwarded-For" value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress))" />
+                </emit-metric>
+            </when>
+        </choose>
+    </outbound>
+    <on-error>
+        <base />
+    </on-error>
+</policies>

@@ -2,7 +2,11 @@
 param location string = resourceGroup().location
 
 @description('Tags to apply to all resources.')
-param tags object = {}
+param tags object = {
+  'managed-by': 'bicep'
+  project: 'aifapim'
+  repository: 'NSLS2/aifapim'
+}
 
 @description('The SKU of the API Management instance.')
 @allowed([
@@ -90,6 +94,17 @@ param anthropicCapacity int
 @maxValue(240)
 param backendTimeoutSeconds int = 240
 
+@description('Image requests each caller may make per minute, across all image routes (FLUX, MAI, gpt-image), keyed by subscription or, for a keyless caller, by the token object id. Images carry no tokens, so the token limit does not cover them. Over the limit the gateway answers 429 with Retry-After.')
+@minValue(1)
+param imageRequestsPerMinute int = 10
+
+@description('Host suffix of the model accounts for the Black Forest Labs provider route (FLUX.2-pro). Both are private-endpoint names with a private DNS zone. Microsoft documents api.cognitive.microsoft.com, but that name does not exist for these accounts.')
+@allowed([
+  'cognitiveservices.azure.com'
+  'services.ai.azure.com'
+])
+param bflEndpointDomain string = 'cognitiveservices.azure.com'
+
 @description('Inbound IP allow-list applied to all three APIM APIs. Each entry is either a single IPv4 address (e.g., "192.0.2.1") or a CIDR range (e.g., "10.0.0.0/16"). CIDR entries are expanded via parseCidr().firstUsable/lastUsable, so the network and broadcast addresses are excluded from the allow-list.')
 @minLength(1)
 param allowedClientIps array
@@ -103,6 +118,63 @@ param apimProductDisplayName string = 'AIFAPIM'
 @description('Description for the APIM product.')
 param apimProductDescription string = 'AI Foundry APIM product. Groups the Azure OpenAI, Azure OpenAI v1 Messages, and Anthropic APIs.'
 
+@description('Extra APIM products for service (machine) keys. Each entry is { name, displayName, description, allowedClientIps?, entraAuth? }. Each holds the three inference APIs and the catalog API, like the user product. allowedClientIps (IPv4 addresses, or CIDR ranges taken from the network to the broadcast address) restricts the product to those callers, in addition to the global allowedClientIps. entraAuth ({ tenantId, audience, role }) makes the product need a Microsoft Entra ID app-only access token as well as the key: signed by the tenant, issued for the audience (the client ID of the gateway API app), holding the app role, and obtained with a certificate. open: true makes it the OPEN product: no subscription key is needed, the Entra token alone decides access, from a service principal (the app role, with a certificate) or from a person (a delegated token holding the scope). An open product needs entraAuth { tenantId, audience, role, scope, userRole } (role is the app role for services, scope the delegated scope and userRole the app role a person must hold) and may add clientApplicationIds (client app IDs allowed to ask for a person\'s token); without them it denies every request. An API can be in only one open product, so there is at most one. Keep the real values out of this repository (they belong in the environment parameter file).')
+param serviceProducts array = []
+
+@description('Switch for the open (keyless) product. When false, an entry of serviceProducts with open: true is still created, but its policy refuses every request with HTTP 401 OpenProductDisabled, so no request gets in without a subscription key. The product is not deleted (an incremental deployment never deletes it), so switching off always means this refusing policy. Default true.')
+param openProductEnabled bool = true
+
+@description('The claude-auto model of the Anthropic API: the gateway rates the request with a small classifier model and rewrites the model to one of three real models. Leave empty to turn it off. Keys, all required when set: classifierModel, simpleModel, mediumModel and complexModel, each the name of a deployment in the primary region. The complex model is also the answer when the classifier fails.')
+param claudeAuto object = {}
+
+@description('Curated model catalog JSON array (id/name/provider/context/output per chat-LLM model). Populated in the bicepparam file via loadTextContent(\'./model-catalog.json\'). Baked into the GET /catalog return-response policy at deploy time.')
+param catalogJson string
+
+@description('Image model catalog JSON array (id/name/provider/create/edit/routes/residency per image model). Populated in the bicepparam file via loadTextContent(\'./image-catalog.json\'). Baked into the GET /catalog/images return-response policy at deploy time. Kept apart from catalogJson so that clients building a chat model list never see an image model.')
+param imageCatalogJson string = '[]'
+
+@description('Embedding model catalog JSON array (id/name/provider/dimensions/max_input_tokens/route/residency per embedding model). Populated in the bicepparam file via loadTextContent(\'./embedding-catalog.json\'). Baked into the GET /catalog/embeddings return-response policy at deploy time. Kept apart from catalogJson because an embedding model has format OpenAI and would be offered to chat clients as a chat model.')
+param embeddingCatalogJson string = '[]'
+
+@description('Router catalog JSON array (id/name/provider/context/output/mode/models/routes/residency per model router). Populated in the bicepparam file via loadTextContent(\'./router-catalog.json\'). Baked into the GET /catalog/routers return-response policy at deploy time. Kept apart from catalogJson because a router has format OpenAI but serves Chat Completions only, and chat clients built from catalogJson use the Responses API.')
+param routerCatalogJson string = '[]'
+
+@description('Store the raw body of every POST to the three inference APIs in a write-once (WORM) blob, and load a searchable copy into a separate Log Analytics workspace. The built-in LLM log drops the prompt of Claude requests whose system field is a list of blocks. Off by default: it needs a subnet, storage, a function app, private endpoints and an Azure Monitor private link scope, and the stored bodies contain whatever users send.')
+param requestBodyLogging bool = false
+
+@description('Write one Application Insights trace per request to the five inference APIs that names the caller (the subscription of a key, or the object id of a token caller), with the request id, API, product and model. Join it to ApiManagementGatewayLlmLog on CorrelationId for tokens per caller. Needed for keyless callers of the open product, which have no subscription to name them in the gateway log; harmless for keyed callers.')
+param usageTrace bool = false
+
+@description('CIDR of the subnet created in regions[0]\'s virtual network for the request log function (at least a /27, inside regions[0].vnetAddressPrefix). Required when requestBodyLogging is true.')
+param requestLogSubnetIPPrefix string = ''
+
+@description('Object ID of the Entra group that may read the stored request bodies (Storage Blob Data Reader and Log Analytics Reader). Leave empty to skip the assignments.')
+param requestLogReaderGroupObjectId string = ''
+
+@description('Public IPv4 addresses or CIDR ranges allowed to read the request body blobs from outside the VNet. Empty means private endpoint access only.')
+param requestLogReaderIps array = []
+
+@description('Maximum number of request log function instances. Bounds the load on the ingestion endpoint.')
+@minValue(1)
+@maxValue(100)
+param requestLogMaxInstances int = 4
+
+@description('Days of the time-based immutability (WORM) policy on the request body container. 146000 days (about 400 years) is the Azure maximum. The policy is created unlocked; locking it cannot be undone and is a separate step.')
+@minValue(1)
+@maxValue(146000)
+param requestLogImmutabilityDays int = 146000
+
+@description('Whether the template creates and updates the immutability policy on the request body container. Set to false after the policy has been locked, because a locked policy can only be extended.')
+param requestLogManageImmutabilityPolicy bool = true
+
+@description('Move request body blobs to the Cold tier after this many days.')
+@minValue(1)
+param requestLogColdAfterDays int = 7
+
+@description('Move request body blobs to the Archive tier after this many days.')
+@minValue(2)
+param requestLogArchiveAfterDays int = 90
+
 // Render the IP allow-list entries as APIM ip-filter child elements. CIDR
 // entries become <address-range from=... to=.../> using parseCidr's
 // firstUsable/lastUsable; bare addresses become <address>...</address>.
@@ -115,15 +187,58 @@ var allowedIpsXml = join(map(allowedClientIps, ip => contains(ip, '/')
 // Policies and API definition are loaded from the local repository so deployments do not depend on external URLs.
 // Substitutions applied to each policy XML:
 //   __BACKEND_TIMEOUT__    -> backendTimeoutSeconds (forward-request timeout)
+//   __IMAGE_REQUESTS_PER_MINUTE__ -> imageRequestsPerMinute (per-caller image limit)
 //   __ALLOWED_CLIENT_IPS__ -> allowedIpsXml (ip-filter allow-list built from allowedClientIps)
 //   __METRIC_NAMESPACE__   -> apimProductName (App Insights custom-metric namespace)
-var openApiXml = replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName)
+//   __SECONDARY_MODELS__   -> secondaryModelList (models deployed in the secondary region;
+//                             the policies fail over only for these)
+//   <!-- __REQUEST_LOG__ --> -> inboundLogXml (usage trace and request body log blocks, or nothing)
+var secondaryModelList = '|${join(map(modelDeployments[0], d => d.name), '|')}|'
+
+// Request body log. The three inference policies carry the marker comment below
+// in <inbound>. It is replaced by apim_policies/RequestBodyLog_Fragment.xml
+// when requestBodyLogging is true (with the blob endpoint and container filled
+// in), and by nothing when it is false. Applied last, so the fragment is not
+// touched by the other substitutions.
+var requestLogMarker = '<!-- __REQUEST_LOG__ -->'
+var requestLogStorageName = 'stllmreq${unique}'
+var requestLogContainerName = 'llm-requests'
+var requestLogXml = requestBodyLogging ? replace(replace(loadTextContent('apim_policies/RequestBodyLog_Fragment.xml'), '__REQUEST_LOG_BLOB_ENDPOINT__', 'https://${requestLogStorageName}.blob.${environment().suffixes.storage}'), '__REQUEST_LOG_CONTAINER__', requestLogContainerName) : ''
+// The usage trace (apim_policies/UsageTrace_Fragment.xml) goes in at the same
+// marker, before the request body log, when usageTrace is true.
+var usageTraceXml = usageTrace ? loadTextContent('apim_policies/UsageTrace_Fragment.xml') : ''
+var inboundLogXml = '${usageTraceXml}${requestLogXml}'
+var openApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
 
 // Anthropic API policy (multi-region retry variant).
-var anthropicApiXml = replace(replace(replace(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName)
+// The claude-auto block (apim_policies/ClaudeAuto_Fragment.xml) replaces the
+// marker comment in <inbound> when the claudeAuto parameter is set, and nothing
+// otherwise. Applied after the other substitutions, so its own placeholders
+// are filled in here and the metric namespace is filled in afterwards.
+var claudeAutoMarker = '<!-- __CLAUDE_AUTO__ -->'
+var claudeAutoXml = empty(claudeAuto) ? '' : replace(replace(replace(replace(replace(loadTextContent('apim_policies/ClaudeAuto_Fragment.xml'), '__CLAUDE_AUTO_URL__', '${anthropicServiceUrlPrimary}/v1/messages'), '__CLAUDE_AUTO_CLASSIFIER__', claudeAuto.classifierModel), '__CLAUDE_AUTO_SIMPLE__', claudeAuto.simpleModel), '__CLAUDE_AUTO_MEDIUM__', claudeAuto.mediumModel), '__CLAUDE_AUTO_COMPLEX__', claudeAuto.complexModel)
+var anthropicApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), claudeAutoMarker, claudeAutoXml), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml)
 
 // OpenAI v1 Messages API policy (multi-region retry variant).
-var openaiV1MessagesApiXml = replace(replace(replace(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName)
+var openaiV1MessagesApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+
+// Black Forest Labs API policy (multi-region retry variant).
+var bflApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/BlackForestLabs_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+
+// MAI image API policy (one backend, no failover: the models are in the secondary region only).
+var maiApiXml = replace(replace(replace(replace(replace(loadTextContent('apim_policies/MAI_Image_Policy-Managed_Identity_with_Retry.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+
+// Catalog API policy: static return-response, no backend.
+// Sentinels replaced: __ALLOWED_CLIENT_IPS__ (IP filter), __CATALOG_JSON__ (chat model list
+// body), __IMAGE_CATALOG_JSON__ (image model list body), __EMBEDDING_CATALOG_JSON__
+// (embedding model list body) and __ROUTER_CATALOG_JSON__ (model router list body).
+// The JSON is XML-escaped (& first) because it lands in element text; APIM
+// unescapes it, so the response body is the original JSON.
+var catalogJsonXml = replace(replace(replace(catalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
+var embeddingCatalogJsonXml = replace(replace(replace(embeddingCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
+var routerCatalogJsonXml = replace(replace(replace(routerCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
+var imageCatalogJsonXml = replace(replace(replace(imageCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
+var catalogApiXml = replace(replace(replace(replace(replace(loadTextContent('apim_policies/Catalog_Policy.xml'), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__ROUTER_CATALOG_JSON__', routerCatalogJsonXml), '__EMBEDDING_CATALOG_JSON__', embeddingCatalogJsonXml), '__IMAGE_CATALOG_JSON__', imageCatalogJsonXml), '__CATALOG_JSON__', catalogJsonXml)
 
 // Azure OpenAI data-plane inference spec is pinned locally so deployments are
 // deterministic and do not depend on github.com being reachable at deploy time.
@@ -146,6 +261,66 @@ var openaiV1MessagesApiDisplayName = 'Azure OpenAI v1 Messages API'
 var anthropicApiName = 'anthropic-service-api'
 var anthropicApiPath = 'anthropic'
 var anthropicApiDisplayName = 'Anthropic Service API'
+
+var bflApiName = 'black-forest-labs-api'
+var bflApiPath = 'providers/blackforestlabs/v1'
+var bflApiDisplayName = 'Black Forest Labs FLUX API'
+
+var maiApiName = 'mai-image-api'
+var maiApiPath = 'mai/v1'
+var maiApiDisplayName = 'Microsoft MAI Image API'
+
+var catalogApiName = 'catalog-api'
+var catalogApiPath = 'catalog'
+var catalogApiDisplayName = 'AIFAPIM Model Catalog API'
+var catalogProductName = 'aifapim-catalog'
+var catalogProductDisplayName = 'NSLS-II AIF APIM Services (catalog poller)'
+var catalogProductDescription = 'Read-only product scoped to GET /catalog only, for the catalog poller service. Keys issued under this product cannot call inference endpoints.'
+
+// Service products: the product-level ip-filter policy is rendered per product
+// when it has allowedClientIps. A CIDR entry covers the whole range, network to
+// broadcast (unlike the global allow-list, which uses the usable addresses), so
+// that every address of the NSLS-II NAT pool, all 16 in use, is accepted.
+//
+// A product with entraAuth also needs an Entra ID access token (see
+// apim_policies/Product_EntraAuth_Policy.xml). Its policy has the same ip-filter
+// block when the product has allowedClientIps. The values go into XML, so they
+// are escaped.
+func xmlEscape(value string) string => replace(replace(replace(replace(replace(value, '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '"', '&quot;'), '\'', '&apos;')
+
+func productIpFilterXml(ips array) string => empty(ips) ? '' : '<ip-filter action="allow">\n            ${join(map(ips, ip => contains(ip, '/') ? '<address-range from="${parseCidr(ip).network}" to="${parseCidr(ip).broadcast}" />' : '<address>${ip}</address>'), '\n            ')}\n        </ip-filter>'
+
+var productIpPolicyTemplate = loadTextContent('apim_policies/Product_IpRestricted_Policy.xml')
+var productEntraAuthPolicyTemplate = loadTextContent('apim_policies/Product_EntraAuth_Policy.xml')
+
+// The open product needs no subscription key, so its policy is the only access
+// check. It accepts people only (services must send key and token, in their own
+// product). It is rendered only when entraAuth is complete (tenantId, audience,
+// scope and userRole; role is not used); anything less renders a policy that refuses every request, never an
+// inheritance-only one, which would leave the product open to anyone. The optional
+// clientApplicationIds list is written as client-application-ids in the branch
+// that validates a person's token. With openProductEnabled false the open product
+// gets a policy that refuses every request instead (401 OpenProductDisabled).
+var productEntraOpenPolicyTemplate = loadTextContent('apim_policies/Product_EntraOpen_Policy.xml')
+var productOpenDisabledPolicyXml = '<policies><inbound><base /><return-response><set-status code="401" reason="Unauthorized" /><set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header><set-body>{"error":{"code":"OpenProductDisabled","message":"Keyless access is switched off on this gateway. Send a subscription key in the x-api-key header."}}</set-body></return-response></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
+var productDenyAllPolicyXml = '<policies><inbound><base /><return-response><set-status code="503" reason="Service Unavailable" /><set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header><set-body>{"error":{"code":"ProductNotConfigured","message":"This product is open but its Entra ID settings are incomplete."}}</set-body></return-response></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
+func entraOpenComplete(e object) bool => !empty(e.?tenantId ?? '') && !empty(e.?audience ?? '') && !empty(e.?scope ?? '') && !empty(e.?userRole ?? '')
+func clientAppsXml(ids array) string => empty(ids) ? '' : '<client-application-ids>\n                        ${join(map(ids, id => '<application-id>${replace(replace(replace(replace(replace(id, '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '"', '&quot;'), '\'', '&apos;')}</application-id>'), '\n                        ')}\n                    </client-application-ids>'
+var serviceProductsResolved = map(serviceProducts, p => {
+  name: p.name
+  displayName: p.displayName
+  description: p.description
+  open: p.?open ?? false
+  policyXml: (p.?open ?? false)
+    ? !openProductEnabled
+      ? productOpenDisabledPolicyXml
+      : (entraOpenComplete(p.?entraAuth ?? {})
+        ? replace(replace(replace(replace(replace(replace(productEntraOpenPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [])), '__ENTRA_CLIENT_APPS__', clientAppsXml(p.entraAuth.?clientApplicationIds ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_SCOPE__', xmlEscape(p.entraAuth.scope)), '__ENTRA_USER_ROLE__', xmlEscape(p.entraAuth.userRole))
+        : productDenyAllPolicyXml)
+    : !empty(p.?entraAuth ?? {})
+    ? replace(replace(replace(replace(productEntraAuthPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_ROLE__', xmlEscape(p.entraAuth.role))
+    : empty(p.?allowedClientIps ?? []) ? '' : replace(productIpPolicyTemplate, '__PRODUCT_ALLOWED_IPS__', join(map(p.allowedClientIps, ip => contains(ip, '/') ? '<address-range from="${parseCidr(ip).network}" to="${parseCidr(ip).broadcast}" />' : '<address>${ip}</address>'), '\n            '))
+})
 
 var unique = uniqueString(resourceGroup().id, subscription().id)
 var apiManagementServiceName = 'apim-${unique}'
@@ -283,12 +458,28 @@ var apiServiceUrlPrimary = 'https://${apiServiceNamePrimary}.openai.azure.com/op
 var apiServiceUrlSecondary = 'https://${apiServiceNameSecondary}.openai.azure.com/openai'
 var anthropicServiceUrlPrimary = 'https://${apiServiceNamePrimary}.services.ai.azure.com/anthropic'
 var anthropicServiceUrlSecondary = 'https://${apiServiceNameSecondary}.services.ai.azure.com/anthropic'
+var bflServiceUrlPrimary = 'https://${apiServiceNamePrimary}.${bflEndpointDomain}/providers/blackforestlabs/v1'
+var bflServiceUrlSecondary = 'https://${apiServiceNameSecondary}.${bflEndpointDomain}/providers/blackforestlabs/v1'
+var maiServiceUrl = 'https://${apiServiceNameSecondary}.services.ai.azure.com/mai/v1'
 
 module logAnalyticsWorkspace 'modules/log-analytics-workspace.bicep' = {
   name: 'log-analytics-workspace'
   params: {
     location: location
     logAnalyticsName: logAnalyticsName
+    tags: tags
+  }
+}
+
+// Event Hub namespace is private-endpoint only. The endpoint goes in the openai
+// subnet of regions[0], the VNet that also holds the APIM subnet, and its
+// privatelink.servicebus.windows.net zone is linked to that VNet.
+module eventHubPrivateDnsZone 'modules/private-dns-zone.bicep' = {
+  name: 'privatelink-servicebus-windows-net'
+  params: {
+    zoneName: 'privatelink.servicebus.windows.net'
+    vnetId: vnet[0].outputs.vnetId
+    tags: tags
   }
 }
 
@@ -298,6 +489,10 @@ module eventHub 'modules/event-hub.bicep' = {
     location: location
     eventHubNamespaceName: eventHubNamespaceName
     eventHubName: eventHubName
+    tags: tags
+    subnetId: vnet[0].outputs.subnetIds.openai
+    privateDnsZoneId: eventHubPrivateDnsZone.outputs.zoneId
+    privateEndpointLocation: regions[0].name
   }
 }
 
@@ -310,6 +505,7 @@ module applicationInsights 'modules/app-insights.bicep' = {
     uniqueSuffix: unique
     alertEmailName: alertEmailName
     alertEmailAddress: alertEmailAddress
+    tags: tags
   }
   dependsOn: [
     logAnalyticsWorkspace
@@ -325,6 +521,7 @@ module llmLatencyAlerts 'modules/llm-latency-alerts.bicep' = {
     workspaceResourceId: logAnalyticsWorkspace.outputs.id
     actionGroupId: applicationInsights.outputs.actionGroupId
     uniqueSuffix: unique
+    tags: tags
   }
 }
 
@@ -336,6 +533,7 @@ module network 'modules/network.bicep' = {
     location: location
     apiManagementSubnetName: apiManagementSubnetName
     apiManagementSubnetIPPrefix: apiManagementSubnetIPPrefix
+    tags: tags
   }
 }
 
@@ -384,6 +582,7 @@ module apiManagement 'modules/api-management-private.bicep' = {
     userAssignedIdentityClientId: !empty(keyVaultName) ? apimIdentity!.properties.clientId : ''
     disableDeveloperPortal: disableDeveloperPortal
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
+    tags: tags
   }
   dependsOn: [
     applicationInsights
@@ -415,14 +614,66 @@ module api 'modules/api.bicep' = {
     serviceUrlSecondary: apiServiceUrlSecondary
     anthropicServiceUrlPrimary: anthropicServiceUrlPrimary
     anthropicServiceUrlSecondary: anthropicServiceUrlSecondary
+    bflServiceUrlPrimary: bflServiceUrlPrimary
+    bflServiceUrlSecondary: bflServiceUrlSecondary
+    bflApiName: bflApiName
+    bflApiPath: bflApiPath
+    bflApiDisplayName: bflApiDisplayName
+    bflApiXml: bflApiXml
+    bflOpenApiSpec: loadTextContent('api_definitions/BlackForestLabs_OpenAPI.json')
+    maiServiceUrl: maiServiceUrl
+    maiApiName: maiApiName
+    maiApiPath: maiApiPath
+    maiApiDisplayName: maiApiDisplayName
+    maiApiXml: maiApiXml
+    maiOpenApiSpec: loadTextContent('api_definitions/MAI_Image_OpenAPI.json')
     aiLoggerId: apiManagement.outputs.aiLoggerId
     apimProductName: apimProductName
     apimProductDisplayName: apimProductDisplayName
     apimProductDescription: apimProductDescription
+    catalogApiName: catalogApiName
+    catalogApiPath: catalogApiPath
+    catalogApiDisplayName: catalogApiDisplayName
+    catalogApiXml: catalogApiXml
+    catalogOpenApiSpec: loadTextContent('api_definitions/Catalog_OpenAPI.json')
+    catalogProductName: catalogProductName
+    catalogProductDisplayName: catalogProductDisplayName
+    catalogProductDescription: catalogProductDescription
+    serviceProducts: serviceProductsResolved
   }
 }
 
-resource eventHubNamespaceParent 'Microsoft.EventHub/namespaces@2021-01-01-preview' existing = {
+// Request body log: write-once blobs, a function that loads them into a
+// separate Log Analytics workspace, and the roles between them. See
+// modules/request-log.bicep.
+module requestLog 'modules/request-log.bicep' = if (requestBodyLogging) {
+  name: 'request-log'
+  params: {
+    uniqueSuffix: unique
+    location: location
+    tags: tags
+    vnetName: vnet[0].outputs.vnetName
+    vnetId: vnet[0].outputs.vnetId
+    privateEndpointSubnetId: vnet[0].outputs.subnetIds.openai
+    functionSubnetPrefix: requestLogSubnetIPPrefix
+    dataStorageAccountName: requestLogStorageName
+    containerName: requestLogContainerName
+    readerGroupObjectId: requestLogReaderGroupObjectId
+    readerIps: requestLogReaderIps
+    apimPrincipalId: apiManagement.outputs.apiManagementIdentityPrincipalId
+    auditWorkspaceId: logAnalyticsWorkspace.outputs.id
+    applicationInsightsName: applicationInsightsName
+    applicationInsightsId: applicationInsights.outputs.aiId
+    applicationInsightsConnectionString: applicationInsights.outputs.connectionString
+    maximumInstanceCount: requestLogMaxInstances
+    immutabilityPeriodDays: requestLogImmutabilityDays
+    manageImmutabilityPolicy: requestLogManageImmutabilityPolicy
+    coldAfterDays: requestLogColdAfterDays
+    archiveAfterDays: requestLogArchiveAfterDays
+  }
+}
+
+resource eventHubNamespaceParent 'Microsoft.EventHub/namespaces@2024-01-01' existing = {
   name: eventHubNamespaceName
 }
 
@@ -479,3 +730,7 @@ output apiManagementPortalHostName string = apiManagement.outputs.apiManagementD
 output vnetNames array = [for (region, i) in regions: vnet[i].outputs.vnetName]
 output openAiNames array = [for (region, i) in regions: aif[i].outputs.openAiName]
 output openAiEndpoints array = [for (region, i) in regions: aif[i].outputs.openAiEndpoint]
+output requestLogFunctionApp string = requestBodyLogging ? requestLog!.outputs.functionAppName : ''
+output requestLogStorageAccount string = requestBodyLogging ? requestLog!.outputs.dataStorageAccountName : ''
+output requestLogContainer string = requestBodyLogging ? requestLog!.outputs.containerName : ''
+output requestLogWorkspace string = requestBodyLogging ? requestLog!.outputs.workspaceName : ''

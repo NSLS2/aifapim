@@ -1,0 +1,71 @@
+<policies>
+  <inbound>
+    <!-- The ip-filter allow-list below is substituted at deploy time by
+         aifapim.bicep from the allowedClientIps parameter (see aifapim.bicepparam). -->
+    <ip-filter action="allow">
+      __ALLOWED_CLIENT_IPS__
+    </ip-filter>
+    <!-- Run the product-level policy: without <base /> a product's own rule (the
+         NAT-pool lock on the internal service product) would not apply here. -->
+    <base />
+    <!-- Static return-response: no backend call is made. Three bodies are baked
+         in at deploy time by aifapim.bicep, each replacing the sentinel in its
+         own set-body element with the XML-escaped JSON: the chat model catalog
+         (model-catalog.json) for GET /catalog, the image model catalog
+         (image-catalog.json) for GET /catalog/images, the embedding model
+         catalog (embedding-catalog.json) for GET /catalog/embeddings and the
+         router catalog (router-catalog.json) for GET /catalog/routers. The
+         sentinels must appear only in set-body: they are replaced everywhere,
+         and the catalog text is not valid inside an XML comment. The catalogs
+         are separate on purpose: clients that build a chat model list from
+         /catalog must never see an image model, an embedding model or a
+         router (a router serves Chat Completions only). -->
+    <choose>
+      <when condition="@(context.Operation.Id == &quot;getImageCatalog&quot;)">
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>__IMAGE_CATALOG_JSON__</set-body>
+        </return-response>
+      </when>
+      <when condition="@(context.Operation.Id == &quot;getRouterCatalog&quot;)">
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>__ROUTER_CATALOG_JSON__</set-body>
+        </return-response>
+      </when>
+      <when condition="@(context.Operation.Id == &quot;getEmbeddingCatalog&quot;)">
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>__EMBEDDING_CATALOG_JSON__</set-body>
+        </return-response>
+      </when>
+      <otherwise>
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>__CATALOG_JSON__</set-body>
+        </return-response>
+      </otherwise>
+    </choose>
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

@@ -7,6 +7,14 @@
               __ALLOWED_CLIENT_IPS__
         </ip-filter>
         <base />
+        <!-- Who is calling. A keyed request is named by its subscription. A keyless request
+             came through the open product (Product_EntraOpen_Policy.xml), whose policy has
+             validated the token and set callerId (the object id, which is also how personal
+             subscriptions are named) and callerName. The token limit counter, the metric
+             dimensions and the usage record read these two variables, never the
+             subscription directly: context.Subscription is null without a key. -->
+        <set-variable name="usageId" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerId&quot;, &quot;&quot;) : context.Subscription.Id)" />
+        <set-variable name="usageName" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerName&quot;, &quot;&quot;) : context.Subscription.Name)" />
         <!-- Extract the model name from the JSON request body. preserveContent=true
              keeps the body intact for the upstream call. Used as the Model dimension
              on the token metric below. -->
@@ -30,7 +38,17 @@
                 return &quot;false&quot;;
             }
         }" />
-        <llm-token-limit tokens-per-minute="10000000" counter-key="@(context.Subscription.Id)" estimate-prompt-tokens="true" tokens-consumed-header-name="consumed-tokens" remaining-tokens-header-name="remaining-tokens" />
+        <!-- __REQUEST_LOG__ -->
+        <!-- __CLAUDE_AUTO__ -->
+        <!-- Fail over to the secondary region only for models deployed there.
+             aifapim.bicep fills in the model list below at deploy time, as
+             '|name|name|...' from modelDeployments[0]. The placeholder is
+             replaced everywhere it appears, so it must stay out of comments. -->
+        <set-variable name="canFailover" value="@{
+            var model = (string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;);
+            return model.Length &gt; 0 &amp;&amp; &quot;__SECONDARY_MODELS__&quot;.Contains(&quot;|&quot; + model + &quot;|&quot;);
+        }" />
+        <llm-token-limit tokens-per-minute="10000000" counter-key="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" estimate-prompt-tokens="true" tokens-consumed-header-name="consumed-tokens" remaining-tokens-header-name="remaining-tokens" />
         <!-- Emit token metrics with explicit dimensions under the APIM
              custom-metric namespace (substituted at deploy time by aifapim.bicep
              from the apimProductName parameter). This policy attaches dimensions
@@ -46,8 +64,8 @@
              streaming Anthropic responses on classic-tier APIM. -->
         <llm-emit-token-metric namespace="__METRIC_NAMESPACE__">
             <dimension name="API ID" />
-            <dimension name="Subscription ID" />
-            <dimension name="Subscription Name" value="@(context.Subscription.Name)" />
+            <dimension name="Subscription ID" value="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+            <dimension name="Subscription Name" value="@((string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;))" />
             <dimension name="User ID" />
             <dimension name="Product ID" />
             <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;))" />
@@ -56,9 +74,14 @@
         <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
     </inbound>
     <backend>
-        <retry condition="@(context.Response.StatusCode == 404 || context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="5" interval="1" delta="1" max-interval="8" first-fast-retry="false">
+        <!-- 404 is not retried: it means the deployment does not exist, so the
+             backend response is returned to the client unchanged. Failover to
+             the secondary backend happens only when canFailover is set (the
+             model is deployed in the secondary region); otherwise the retry
+             goes back to the current backend. -->
+        <retry condition="@(context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="5" interval="1" delta="1" max-interval="8" first-fast-retry="false">
             <choose>
-                <when condition="@(context.Response.StatusCode == 404 || context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)">
+                <when condition="@((context.Response.StatusCode == 429 || context.Response.StatusCode >= 500) &amp;&amp; context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;canFailover&quot;, false))">
                     <set-backend-service backend-id="anthropic-secondary-backend" />
                 </when>
             </choose>
@@ -67,6 +90,18 @@
     </backend>
     <outbound>
         <base />
+        <!-- Set only when the request asked for claude-auto (see the claudeAuto
+             parameter): the model and the tier that were chosen. -->
+        <choose>
+            <when condition="@(context.Variables.ContainsKey(&quot;claudeAutoTier&quot;))">
+                <set-header name="x-aifapim-routed-model" exists-action="override">
+                    <value>@((string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;))</value>
+                </set-header>
+                <set-header name="x-aifapim-route-tier" exists-action="override">
+                    <value>@((string)context.Variables.GetValueOrDefault(&quot;claudeAutoTier&quot;, &quot;&quot;))</value>
+                </set-header>
+            </when>
+        </choose>
         <!-- For NON-streaming Anthropic responses, extract usage.output_tokens from
              the response body and emit it as the "Anthropic Completion Tokens"
              custom metric. APIM's classic-tier LLM diagnostic does not extract
@@ -94,8 +129,8 @@
                 }" />
                 <emit-metric name="Anthropic Completion Tokens" value="@((double)context.Variables[&quot;anthropicCompletionTokens&quot;])" namespace="__METRIC_NAMESPACE__">
                     <dimension name="API ID" />
-                    <dimension name="Subscription ID" />
-                    <dimension name="Subscription Name" value="@(context.Subscription.Name)" />
+                    <dimension name="Subscription ID" value="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+                    <dimension name="Subscription Name" value="@((string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;))" />
                     <dimension name="User ID" />
                     <dimension name="Product ID" />
                     <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;))" />

@@ -75,6 +75,12 @@ param anthropicCapacity = 100
 // Capped at 240 on classic-tier APIM.
 param backendTimeoutSeconds = 240
 
+// ---- Image requests per caller (per minute) ----
+// One counter per caller (subscription, or token object id for a keyless
+// caller) shared by every image route. Images carry no tokens, so the token
+// limit does not cover them. Default 10.
+param imageRequestsPerMinute = 10
+
 // ---- APIM product ----
 // All three APIs (azure-openai-service-api, azure-openai-v1-messages-api,
 // anthropic-service-api) are grouped under this product. The same value is
@@ -99,6 +105,119 @@ param allowedClientIps = [
   '198.51.100.0/24'    // example /24 (TEST-NET-2)
   '203.0.113.0/24'     // example /24 (TEST-NET-3)
 ]
+
+// ---- Model catalog ----
+// JSON array served by GET /catalog (id/name/provider/context/output per
+// chat-LLM model), baked into the catalog policy at deploy time. Replace the
+// example with a catalog that matches modelDeployments below; context and
+// output windows must come from the vendor model cards.
+param catalogJson = loadTextContent('./model-catalog.example.json')
+
+// ---- claude-auto (optional) ----
+// A model name of the Anthropic API. The gateway has the classifier model rate the
+// request (simple, medium or complex) and rewrites the model to the matching one;
+// the complex model is also used when the classifier fails or is slow. All four
+// must be deployments in the primary region (regions[1]) below. Leave it empty to
+// turn it off. Add the entries below to modelDeployments before you set it.
+// param claudeAuto = {
+//   classifierModel: 'claude-haiku-5-5'
+//   simpleModel: 'claude-haiku-5-5'
+//   mediumModel: 'claude-sonnet-5-5'
+//   complexModel: 'claude-opus-5-5'
+// }
+
+// ---- Service products (optional) ----
+// Extra products for service (machine) keys, each with the three inference APIs
+// and the catalog API. allowedClientIps restricts a product to those callers
+// (a CIDR covers its whole range, network to broadcast), on top of the global
+// allowedClientIps. Leave the list empty to have none.
+// entraAuth makes a product need a Microsoft Entra ID app-only access token as
+// well as the subscription key: tenantId is your tenant, audience is the client ID
+// of the Entra app that represents this gateway, and role is an app role of that app
+// that can be assigned to applications. The token must be signed by the tenant,
+// issued for the audience, hold the role and have been obtained with a certificate.
+// Do not commit real IDs to a public repository: keep them in the environment's own
+// parameter file.
+param serviceProducts = [
+  {
+    name: 'services-external'
+    displayName: 'Services (external)'
+    description: 'Keys for services, from anywhere the gateway allow-list accepts.'
+  }
+  {
+    name: 'services-internal'
+    displayName: 'Services (internal)'
+    description: 'Keys for services on site only.'
+    allowedClientIps: [
+      '192.0.2.0/28'  // example (TEST-NET-1)
+    ]
+  }
+  {
+    name: 'services-token'
+    displayName: 'Services (key and Entra token)'
+    description: 'Keys for services on site that also present a Microsoft Entra ID access token.'
+    allowedClientIps: [
+      '192.0.2.0/28'  // example (TEST-NET-1)
+    ]
+    entraAuth: {
+      tenantId: '00000000-0000-0000-0000-000000000000'    // example, replace
+      audience: '00000000-0000-0000-0000-000000000000'    // example, replace: client ID of the gateway API app
+      role: 'Inference.Invoke'                            // example, replace: an app role of that app
+    }
+  }
+  // The OPEN product: no subscription key, the Entra ID access token alone decides.
+  // People only: a delegated token that holds `scope` and the `userRole` app role.
+  // An app-only (service) token is refused with 403: a service must send its key AND
+  // its token, through a key-and-token product such as services-token above. An API can be in only one
+  // open product, so there is at most one entry with open: true. With an incomplete
+  // entraAuth (tenantId, audience, scope and userRole are all needed) the product
+  // refuses every request instead of being open to anyone.
+  // clientApplicationIds (optional) limits which client apps may ask for a person's
+  // token. Keep the real IDs in the environment's own parameter file.
+  // The template writes the product, then its policy, then its API links, so a new
+  // open product never holds an API without the token check. Add it under a new
+  // name: never set open: true on an existing keyed product, whose APIs are linked
+  // already and would be keyless under its old policy until the new one is written.
+  {
+    name: 'open'
+    displayName: 'Open (Entra token)'
+    description: 'No key: people call with a Microsoft Entra ID access token.'
+    open: true
+    entraAuth: {
+      tenantId: '00000000-0000-0000-0000-000000000000'    // example, replace
+      audience: '00000000-0000-0000-0000-000000000000'    // example, replace: client ID of the gateway API app
+      scope: 'access_as_user'                             // example, replace: a delegated scope for people
+      userRole: 'Inference.User'                          // example, replace: an app role a person must hold
+      // clientApplicationIds: [
+      //   '00000000-0000-0000-0000-000000000000'
+      // ]
+    }
+  }
+]
+
+// Switch for the open product above. false keeps the product but gives it a policy
+// that refuses every request (401 OpenProductDisabled), so nothing gets in without a
+// key; use it to keep an environment keyed-only while its parameter file still lists
+// the open product. Default true.
+param openProductEnabled = true
+
+// ---- Usage record (optional) ----
+// When true, every request to the five inference APIs writes one Application
+// Insights trace (AppTraces) naming the caller: the subscription id of a key, or
+// the object id of a token caller of the open product. Join it to
+// ApiManagementGatewayLlmLog on CorrelationId for tokens per caller. Turn it on
+// when you use an open product, which has no subscription to name the caller.
+param usageTrace = false
+
+// ---- Request body log (optional) ----
+// Off by default. When true, the gateway writes the raw body of every POST to
+// a write-once blob and a function loads a searchable copy into a separate
+// Log Analytics workspace. See README "Request body log". The subnet must lie
+// inside regions[0].vnetAddressPrefix, be at least a /27 and not overlap the
+// apim or openai subnets.
+param requestBodyLogging = false
+// param requestLogSubnetIPPrefix = '10.10.4.0/27'
+// param requestLogReaderGroupObjectId = '<entra-group-object-id>'
 
 // ---- Regions ----
 // Two-region multi-region deployment. regions[1] is the *primary* backend;
@@ -128,8 +247,22 @@ param regions = [
 //   model     - Azure AI Foundry model id
 //   version   - model version
 //   skuName   - 'DataZoneStandard' (OpenAI/Foundry) | 'GlobalStandard' (most others)
-//   capacity  - (optional) per-deployment TPM, overrides openai/anthropicCapacity
-//   format    - (optional) 'Anthropic' | 'Meta' — required for non-OpenAI families
+//   capacity  - (optional) per-deployment TPM, overrides openai/anthropicCapacity.
+//               REQUIRED for formats other than OpenAI and Anthropic.
+//   format    - (optional) 'Anthropic' | 'Meta' | 'Black Forest Labs' — required for non-OpenAI families
+//   versionUpgradeOption - (optional) default 'OnceNewDefaultVersionAvailable'
+//
+// Image models (format 'Black Forest Labs', for example FLUX.2-pro) are quota
+// limited in requests per minute, not tokens. Their DataZoneStandard quota is
+// one pool per subscription shared by every region and account in it, so the
+// capacities of all deployments of a model must add up to that pool or less.
+// The routes differ by model family (see README "Image models"):
+//   FLUX-1.1-pro        create: POST /openai/v1/images/generations?api-version=preview; no edit
+//   FLUX.1-Kontext-pro  create: as above; edit: POST /deployments/{name}/images/edits
+//                       with api-version=2025-04-01-preview (multipart)
+//   FLUX.2-pro          create and edit: POST /providers/blackforestlabs/v1/flux-2-pro
+//                       (JSON; an edit adds input_image as base64)
+// No FLUX model edits through /openai/v1/images/edits.
 //
 // Anthropic models are only offered by Foundry in select regions (currently
 // eastus2); leave them out of regions[0] if that region cannot host them.
@@ -141,6 +274,34 @@ param modelDeployments = [
       model:   'gpt-4.1-mini'
       version: '2025-04-14'
       skuName: 'DataZoneStandard'
+    }
+    // Model router: picks one of the listed models for each request (GPT models only
+    // here; Claude is routed by claude-auto). DataZoneStandard keeps processing in the
+    // US data zone. `routing` is optional: leave it out for Microsoft's full list.
+    // The context window of the router is that of its smallest model.
+    {
+      name:    'model-router'
+      model:   'model-router'
+      version: '2025-11-18'
+      skuName: 'DataZoneStandard'
+      capacity: 100
+      versionUpgradeOption: 'NoAutoUpgrade'
+      routing: {
+        mode: 'balanced'
+        models: [
+          { format: 'OpenAI', name: 'gpt-4.1', version: '2025-04-14' }
+          { format: 'OpenAI', name: 'gpt-4.1-mini', version: '2025-04-14' }
+        ]
+      }
+    }
+    {
+      name:    'FLUX.2-pro'
+      model:   'FLUX.2-pro'
+      version: '1'
+      skuName: 'DataZoneStandard'
+      capacity: 10
+      format:  'Black Forest Labs'
+      versionUpgradeOption: 'NoAutoUpgrade'
     }
     {
       name:    'Llama-3.3-70B-Instruct'
@@ -158,6 +319,34 @@ param modelDeployments = [
       model:   'gpt-4.1-mini'
       version: '2025-04-14'
       skuName: 'DataZoneStandard'
+    }
+    // Model router: picks one of the listed models for each request (GPT models only
+    // here; Claude is routed by claude-auto). DataZoneStandard keeps processing in the
+    // US data zone. `routing` is optional: leave it out for Microsoft's full list.
+    // The context window of the router is that of its smallest model.
+    {
+      name:    'model-router'
+      model:   'model-router'
+      version: '2025-11-18'
+      skuName: 'DataZoneStandard'
+      capacity: 100
+      versionUpgradeOption: 'NoAutoUpgrade'
+      routing: {
+        mode: 'balanced'
+        models: [
+          { format: 'OpenAI', name: 'gpt-4.1', version: '2025-04-14' }
+          { format: 'OpenAI', name: 'gpt-4.1-mini', version: '2025-04-14' }
+        ]
+      }
+    }
+    {
+      name:    'FLUX.2-pro'
+      model:   'FLUX.2-pro'
+      version: '1'
+      skuName: 'DataZoneStandard'
+      capacity: 10
+      format:  'Black Forest Labs'
+      versionUpgradeOption: 'NoAutoUpgrade'
     }
     {
       name:    'claude-sonnet-4-5'

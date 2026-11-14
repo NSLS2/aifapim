@@ -15,11 +15,6 @@
       "post": {
         "operationId": "createResponse",
         "summary": "Create a response (messages API)",
-        "security": [
-          {
-            "apiKeyAuth": []
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -44,16 +39,98 @@
         }
       }
     },
+    "/v1/embeddings": {
+      "post": {
+        "operationId": "createEmbedding",
+        "summary": "Create embeddings",
+        "description": "Get a vector representation of a given input that can be consumed by machine learning models and algorithms.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEmbeddingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateEmbeddingResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/images/generations": {
+      "post": {
+        "operationId": "createImage",
+        "summary": "Create an image",
+        "description": "Generates one or more images from a text prompt. Set model to the deployment name of an image model served on this route, for example gpt-image-2.5-flare, FLUX-1.1-pro or FLUX.1-Kontext-pro. FLUX.2-pro is not served here: use the Black Forest Labs provider route.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateImageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImagesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/images/edits": {
+      "post": {
+        "operationId": "createImageEdit",
+        "summary": "Edit an image",
+        "description": "Edits or extends an image from a text prompt and one or more input images. Set model to the deployment name of an image model that edits on this route, for example gpt-image-2.5-sunburst. No FLUX model edits here: FLUX.1-Kontext-pro edits on /deployments/{name}/images/edits with api-version=2025-04-01-preview, and FLUX.2-pro on the Black Forest Labs provider route.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateImageEditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImagesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/models": {
       "get": {
         "operationId": "listModels",
         "summary": "List available models",
         "description": "Lists the currently available model deployments and provides basic information about each one.",
-        "security": [
-          {
-            "apiKeyAuth": []
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -73,11 +150,6 @@
         "operationId": "retrieveModel",
         "summary": "Retrieve a model",
         "description": "Retrieves a model deployment, providing basic information.",
-        "security": [
-          {
-            "apiKeyAuth": []
-          }
-        ],
         "parameters": [
           {
             "name": "model",
@@ -106,10 +178,17 @@
   },
   "components": {
     "securitySchemes": {
-      "apiKeyAuth": {
+      "apiKeyHeader": {
         "type": "apiKey",
+        "name": "x-api-key",
         "in": "header",
-        "name": "api-key"
+        "description": "Subscription key issued by the gateway."
+      },
+      "entraToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Microsoft Entra ID access token for the gateway API. Without a subscription key it is the only credential (the open product); a service product with Entra authentication requires it together with the key."
       }
     },
     "schemas": {
@@ -198,6 +277,203 @@
           }
         }
       },
+      "CreateEmbeddingRequest": {
+        "type": "object",
+        "required": ["model", "input"],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Deployment name in Azure (e.g. text-embedding-3-large)."
+          },
+          "input": {
+            "description": "Input text to embed. Pass a string or an array of strings.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "maxItems": 2048
+              }
+            ]
+          },
+          "dimensions": {
+            "type": "integer",
+            "description": "Number of dimensions for the output embedding. Supported on text-embedding-3 and later models only."
+          },
+          "encoding_format": {
+            "type": "string",
+            "enum": ["float", "base64"],
+            "description": "Format for the returned embeddings. Defaults to float."
+          },
+          "user": {
+            "type": "string",
+            "description": "Unique identifier representing the end-user."
+          }
+        }
+      },
+      "CreateEmbeddingResponse": {
+        "type": "object",
+        "required": ["object", "model", "data", "usage"],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": ["list"]
+          },
+          "model": {
+            "type": "string",
+            "description": "The deployment name used for the embedding."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["index", "object", "embedding"],
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "object": {
+                  "type": "string",
+                  "enum": ["embedding"]
+                },
+                "embedding": {
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    {
+                      "type": "string",
+                      "description": "Base64-encoded vector, returned when encoding_format is base64."
+                    }
+                  ],
+                  "description": "The embedding vector: an array of numbers, or a base64 string when encoding_format is base64."
+                }
+              }
+            }
+          },
+          "usage": {
+            "type": "object",
+            "required": ["prompt_tokens", "total_tokens"],
+            "properties": {
+              "prompt_tokens": {
+                "type": "integer"
+              },
+              "total_tokens": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "CreateImageRequest": {
+        "type": "object",
+        "required": ["model", "prompt"],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "The deployment name of the image model, for example gpt-image-2.5-flare or FLUX-1.1-pro."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "A text description of the desired image."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "The number of images to generate."
+          },
+          "size": {
+            "type": "string",
+            "example": "1024x1024",
+            "description": "The size of the generated images."
+          },
+          "output_format": {
+            "type": "string",
+            "description": "The image file format, for example png or jpeg."
+          },
+          "user": {
+            "type": "string",
+            "description": "A unique identifier representing the end user."
+          }
+        },
+        "additionalProperties": true
+      },
+      "CreateImageEditRequest": {
+        "type": "object",
+        "required": ["model", "prompt", "image"],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "The deployment name of the image model, for example gpt-image-2.5-sunburst."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "A text description of the desired edit."
+          },
+          "image": {
+            "type": "string",
+            "format": "binary",
+            "description": "The image to edit."
+          },
+          "mask": {
+            "type": "string",
+            "format": "binary",
+            "description": "Optional mask image. Not every image model supports a mask."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "The number of images to generate."
+          },
+          "size": {
+            "type": "string",
+            "description": "The size of the generated images."
+          },
+          "user": {
+            "type": "string",
+            "description": "A unique identifier representing the end user."
+          }
+        }
+      },
+      "ImagesResponse": {
+        "type": "object",
+        "required": ["created", "data"],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "description": "The unix timestamp when the images were created."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "b64_json": {
+                  "type": "string",
+                  "description": "The base64 encoded image."
+                },
+                "url": {
+                  "type": "string",
+                  "description": "The image URL, when the model returns one."
+                },
+                "revised_prompt": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
       "Model": {
         "type": "object",
         "properties": {
@@ -234,5 +510,13 @@
         }
       }
     }
-  }
+  },
+  "security": [
+    {
+      "apiKeyHeader": []
+    },
+    {
+      "entraToken": []
+    }
+  ]
 }

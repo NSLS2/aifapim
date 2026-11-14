@@ -1,0 +1,30 @@
+<!-- Usage record. One Application Insights trace per request that names the caller:
+             the object id of a person or service principal (keyless request, through the
+             open product), or the subscription id of a key. aifapim.bicep substitutes this
+             block into the five inference policies, through the same marker as the request
+             body log, when usageTrace is true. The trace is not sampled and lands in the
+             AppTraces table with the values below as Properties. RequestId is the
+             CorrelationId of ApiManagementGatewayLogs and ApiManagementGatewayLlmLog,
+             so joining on it gives the tokens and the model for the caller. The model is
+             cleaned and cut here because it comes from the client. It runs after
+             usageId and usageName are set and before the request is refused or sent on,
+             so refused requests are recorded too. -->
+        <set-variable name="usageModel" value="@{
+            var m = System.Text.RegularExpressions.Regex.Replace((string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, (string)context.Variables.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;)), &quot;[^A-Za-z0-9._@\\-]&quot;, &quot;_&quot;);
+            if (m.Length == 0) { return &quot;-&quot;; }
+            return m.Length &gt; 64 ? m.Substring(0, 64) : m;
+        }" />
+        <!-- A trace metadata value must not be empty: APIM fails the request with a 500
+             (ExpressionValueValidationFailure, "The value field is required"). Every value
+             below falls back to a dash. A keyed request has no client, for instance. -->
+        <trace source="aifapim-usage" severity="information">
+            <message>usage</message>
+            <metadata name="RequestId" value="@{ var v = context.RequestId.ToString(); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="CallerType" value="@{ var v = context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerType&quot;, &quot;&quot;) : &quot;key&quot;; return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="CallerId" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="CallerName" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="Client" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;callerClient&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="Api" value="@{ var v = context.Api.Name; return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="Product" value="@{ var v = context.Product == null ? null : context.Product.Id; return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="Model" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;usageModel&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+        </trace>

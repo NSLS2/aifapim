@@ -7,37 +7,170 @@
               __ALLOWED_CLIENT_IPS__
         </ip-filter>
         <base />
+        <!-- Who is calling. A keyed request is named by its subscription. A keyless request
+             came through the open product (Product_EntraOpen_Policy.xml), whose policy has
+             validated the token and set callerId (the object id, which is also how personal
+             subscriptions are named) and callerName. The token limit counter, the metric
+             dimensions and the usage record read these two variables, never the
+             subscription directly: context.Subscription is null without a key. -->
+        <set-variable name="usageId" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerId&quot;, &quot;&quot;) : context.Subscription.Id)" />
+        <set-variable name="usageName" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerName&quot;, &quot;&quot;) : context.Subscription.Name)" />
+        <!-- Image requests per caller. Images carry no tokens, so the token limit does
+             not cover them. One counter per caller (usageId) is shared by every image
+             route of the gateway (the counter key is the same in all four image
+             policies), so a caller cannot multiply the limit by switching APIs.
+             The limit is filled in by aifapim.bicep
+             (imageRequestsPerMinute). It runs before the request body log, so a
+             refused request is not stored. -->
+        <choose>
+            <when condition="@(context.Request.Url.Path.Contains(&quot;/images/&quot;))">
+                <rate-limit-by-key calls="__IMAGE_REQUESTS_PER_MINUTE__" renewal-period="60" counter-key="@(&quot;images:&quot; + (string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+            </when>
+        </choose>
         <!-- Extract the model name from the JSON request body. preserveContent=true
              keeps the body intact for the upstream call. Used as the Model dimension
              on the token metric below. -->
+        <set-variable name="isImageRequest" value="@(context.Request.Url.Path.Contains(&quot;/images/&quot;))" />
+        <!-- Image edits arrive as multipart form data, not JSON. The form is read
+             once into formFields with the same reader as the MAI image policy
+             (MAI_Image_Policy-Managed_Identity_with_Retry.xml; keep the two
+             identical, tests/policy/mai-policy-test.ps1 checks it): split on the
+             delimiter lines of the declared boundary, each field named only by
+             its Content-Disposition header, so text inside a prompt or a file
+             cannot pose as the model field. formFields is null for other bodies. -->
+        <set-variable name="formFields" value="@{
+            try {
+                var contentType = context.Request.Headers.GetValueOrDefault(&quot;Content-Type&quot;, &quot;&quot;);
+                if (!contentType.StartsWith(&quot;multipart/form-data&quot;, StringComparison.OrdinalIgnoreCase)) { return null; }
+                var fields = new JObject();
+                string boundary = null;
+                var cparts = contentType.Split(';');
+                for (int i = 1; i &lt; cparts.Length; i++) {
+                    var eq = cparts[i].IndexOf('=');
+                    if (eq &gt; 0 &amp;&amp; cparts[i].Substring(0, eq).Trim().Equals(&quot;boundary&quot;, StringComparison.OrdinalIgnoreCase)) {
+                        if (boundary != null) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                        boundary = cparts[i].Substring(eq + 1).Trim().Trim('&quot;');
+                    }
+                }
+                if (string.IsNullOrEmpty(boundary)) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                var text = context.Request.Body.As&lt;string&gt;(preserveContent: true).Replace(&quot;\r\n&quot;, &quot;\n&quot;);
+                var delim = System.Text.RegularExpressions.Regex.Replace(&quot;--&quot; + boundary, &quot;[\\\\.*+?^$(){}|\\[\\]#\\s]&quot;, &quot;\\$&amp;&quot;);
+                if (!System.Text.RegularExpressions.Regex.IsMatch(text, &quot;(?m)^&quot; + delim + &quot;--[ \\t]*$&quot;)) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                var chunks = System.Text.RegularExpressions.Regex.Split(text, &quot;(?m)^&quot; + delim + &quot;(?:--)?[ \\t]*$&quot;);
+                var parameter = new System.Text.RegularExpressions.Regex(&quot;\\G\\s*;\\s*([^=;\&quot;\\s]+)\\s*=\\s*(?:\&quot;((?:[^\&quot;\\\\]|\\\\.)*)\&quot;|([^;\&quot;\\s]*))\\s*&quot;);
+                for (int i = 1; i &lt; chunks.Length - 1; i++) {
+                    var part = chunks[i];
+                    if (part.StartsWith(&quot;\n&quot;)) { part = part.Substring(1); }
+                    string headers = &quot;&quot;;
+                    string value = &quot;&quot;;
+                    if (part.StartsWith(&quot;\n&quot;)) {
+                        value = part.Substring(1);
+                    } else {
+                        var sep = part.IndexOf(&quot;\n\n&quot;, StringComparison.Ordinal);
+                        if (sep &lt; 0) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                        headers = part.Substring(0, sep);
+                        value = part.Substring(sep + 2);
+                    }
+                    var dispositions = 0;
+                    var names = 0;
+                    string name = null;
+                    foreach (var line in System.Text.RegularExpressions.Regex.Replace(headers, &quot;\n[ \\t]+&quot;, &quot; &quot;).Split('\n')) {
+                        if (!line.StartsWith(&quot;content-disposition:&quot;, StringComparison.OrdinalIgnoreCase)) { continue; }
+                        dispositions++;
+                        var disposition = line.Substring(line.IndexOf(':') + 1).Trim();
+                        var pos = disposition.IndexOf(';');
+                        if (pos &lt; 0) { pos = disposition.Length; }
+                        while (pos &lt; disposition.Length) {
+                            var pm = parameter.Match(disposition, pos);
+                            if (!pm.Success) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                            pos = pm.Index + pm.Length;
+                            var pk = pm.Groups[1].Value.ToLowerInvariant();
+                            if (pk == &quot;name*&quot;) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                            if (pk == &quot;name&quot;) {
+                                names++;
+                                name = pm.Groups[2].Success ? System.Text.RegularExpressions.Regex.Replace(pm.Groups[2].Value, &quot;\\\\(.)&quot;, &quot;$1&quot;) : pm.Groups[3].Value;
+                            }
+                        }
+                    }
+                    if (dispositions &gt; 1 || names &gt; 1) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                    if (name == null) { continue; }
+                    var key = name.Trim().ToLowerInvariant();
+                    if (!(fields[key] is JArray)) { fields[key] = new JArray(); }
+                    if (value.EndsWith(&quot;\n&quot;)) { value = value.Substring(0, value.Length - 1); }
+                    ((JArray)fields[key]).Add(value.Length &gt; 256 ? value.Substring(0, 256) : value);
+                }
+                return fields;
+            } catch {
+                var failed = new JObject();
+                failed[&quot;#ambiguous&quot;] = true;
+                return failed;
+            }
+        }" />
+        <!-- The model name: the JSON body's model field, or for a multipart form
+             its single model field, kept only when it is a plain deployment
+             name and the form was read with certainty. -->
         <set-variable name="requestModel" value="@{
             try {
+                var fields = context.Variables.GetValueOrDefault&lt;JObject&gt;(&quot;formFields&quot;, null);
+                if (fields != null) {
+                    var mf = fields[&quot;model&quot;] as JArray;
+                    var model = (mf != null &amp;&amp; mf.Count == 1 &amp;&amp; (fields[&quot;#ambiguous&quot;] as JValue) == null) ? ((string)mf[0]).Trim() : &quot;&quot;;
+                    return System.Text.RegularExpressions.Regex.IsMatch(model, &quot;^[A-Za-z0-9._-]{1,64}$&quot;) ? model : &quot;&quot;;
+                }
                 var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true);
                 return (string)body[&quot;model&quot;] ?? &quot;&quot;;
             } catch {
                 return &quot;&quot;;
             }
         }" />
-        <llm-token-limit tokens-per-minute="10000000" counter-key="@(context.Subscription.Id)" estimate-prompt-tokens="true" tokens-consumed-header-name="consumed-tokens" remaining-tokens-header-name="remaining-tokens" />
+        <!-- __REQUEST_LOG__ -->
+        <!-- Fail over to the secondary region only for models deployed there.
+             aifapim.bicep fills in the model list below at deploy time, as
+             '|name|name|...' from modelDeployments[0]. The placeholder is
+             replaced everywhere it appears, so it must stay out of comments.
+             Model listing and retrieval requests (GET .../models and
+             .../models/{id}) carry no model name here, so canFailover is
+             false for them on purpose: each region lists only its own
+             models, so a failover would return the secondary's shorter list
+             and clients would think the primary-only models had gone. A
+             connection reset or 5xx on those routes is retried on the
+             primary instead. -->
+        <set-variable name="canFailover" value="@{
+            var model = (string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;);
+            return model.Length &gt; 0 &amp;&amp; &quot;__SECONDARY_MODELS__&quot;.Contains(&quot;|&quot; + model + &quot;|&quot;);
+        }" />
+        <!-- Image requests carry no token usage: the token limit and token
+             metric policies are built for text and are skipped for them.
+             Image requests are counted in outbound. -->
+        <choose>
+            <when condition="@(!context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;isImageRequest&quot;, false))">
+        <llm-token-limit tokens-per-minute="10000000" counter-key="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" estimate-prompt-tokens="true" tokens-consumed-header-name="consumed-tokens" remaining-tokens-header-name="remaining-tokens" />
         <!-- Emit token metrics under a custom namespace, parallel to the
              Anthropic policy. Captures the Model dimension explicitly so that
              per-model token accounting is reliable in App Insights regardless
              of LlmLog ModelName behavior. -->
         <llm-emit-token-metric namespace="__METRIC_NAMESPACE__">
             <dimension name="API ID" />
-            <dimension name="Subscription ID" />
-            <dimension name="Subscription Name" value="@(context.Subscription.Name)" />
+            <dimension name="Subscription ID" value="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+            <dimension name="Subscription Name" value="@((string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;))" />
             <dimension name="User ID" />
             <dimension name="Product ID" />
             <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;))" />
             <dimension name="X-Forwarded-For" value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress))" />
         </llm-emit-token-metric>
+            </when>
+        </choose>
         <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
     </inbound>
     <backend>
-        <retry condition="@(context.Response.StatusCode == 404 || context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="5" interval="1" delta="1" max-interval="8" first-fast-retry="false">
+        <!-- 404 is not retried: it means the deployment does not exist, so the
+             backend response is returned to the client unchanged. Failover to
+             the secondary backend happens only when canFailover is set (the
+             model is deployed in the secondary region); otherwise the retry
+             goes back to the current backend. -->
+        <retry condition="@(context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="5" interval="1" delta="1" max-interval="8" first-fast-retry="false">
             <choose>
-                <when condition="@(context.Response.StatusCode == 404 || context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)">
+                <when condition="@((context.Response.StatusCode == 429 || context.Response.StatusCode >= 500) &amp;&amp; context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;canFailover&quot;, false))">
                     <set-backend-service backend-id="aoai-v1-messages-secondary-backend" />
                 </when>
             </choose>
@@ -46,6 +179,29 @@
     </backend>
     <outbound>
         <base />
+        <!-- Count generated images per model. Successful image requests only;
+             the value is the number of images in the response data. -->
+        <choose>
+            <when condition="@(context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;isImageRequest&quot;, false) &amp;&amp; context.Response.StatusCode == 200)">
+                <emit-metric name="Image Count" value="@{
+                    try {
+                        var body = context.Response.Body.As&lt;JObject&gt;(preserveContent: true);
+                        var data = body[&quot;data&quot;] as JArray;
+                        return data != null ? (double)data.Count : 1.0;
+                    } catch {
+                        return 1.0;
+                    }
+                }" namespace="__METRIC_NAMESPACE__">
+                    <dimension name="API ID" />
+                    <dimension name="Subscription ID" value="@((string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))" />
+                    <dimension name="Subscription Name" value="@((string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;))" />
+                    <dimension name="User ID" />
+                    <dimension name="Product ID" />
+                    <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;requestModel&quot;, &quot;&quot;))" />
+                    <dimension name="X-Forwarded-For" value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress))" />
+                </emit-metric>
+            </when>
+        </choose>
     </outbound>
     <on-error>
         <base />

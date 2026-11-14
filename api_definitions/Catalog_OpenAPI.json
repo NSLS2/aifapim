@@ -1,0 +1,310 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "AIFAPIM Model Catalog API",
+    "description": "Returns the curated list of chat-LLM models served by this gateway, including provider, context window, and max output tokens. Body is baked in at deploy time from model-catalog.json in the aifapim-config repo.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "getCatalog",
+        "summary": "List all available chat-LLM models with token window metadata",
+        "responses": {
+          "200": {
+            "description": "Array of model catalog entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "name",
+                      "provider",
+                      "context",
+                      "output"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Model deployment name (pass as 'model' in API requests)"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "Human-readable display name"
+                      },
+                      "provider": {
+                        "type": "string",
+                        "description": "Model provider (OpenAI or Anthropic)"
+                      },
+                      "context": {
+                        "type": "integer",
+                        "description": "Maximum context window in tokens"
+                      },
+                      "output": {
+                        "type": "integer",
+                        "description": "Maximum output tokens"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid subscription key"
+          },
+          "403": {
+            "description": "Client IP not in allow-list"
+          }
+        }
+      }
+    },
+    "/images": {
+      "get": {
+        "operationId": "getImageCatalog",
+        "summary": "List all available image models with their routes and limits",
+        "description": "Image models are not in GET /catalog. Each entry says which gateway route creates and edits images with that model, because the routes differ between model families.",
+        "responses": {
+          "200": {
+            "description": "Array of image model entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "name",
+                      "provider",
+                      "create",
+                      "edit",
+                      "routes",
+                      "residency"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Model deployment name (pass as 'model' in API requests)"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "Human-readable display name"
+                      },
+                      "provider": {
+                        "type": "string"
+                      },
+                      "create": {
+                        "type": "boolean"
+                      },
+                      "edit": {
+                        "type": "boolean"
+                      },
+                      "routes": {
+                        "type": "object",
+                        "description": "Gateway route for each operation: method, path and query"
+                      },
+                      "residency": {
+                        "type": "string",
+                        "description": "DataZone (processed in the US data zone) or Global (may be processed outside the US)"
+                      },
+                      "retires": {
+                        "type": "string",
+                        "description": "Date Microsoft retires the model (YYYY-MM-DD)"
+                      },
+                      "notes": {
+                        "type": "string",
+                        "description": "Limits and quirks of the model: sizes, output format, how many reference images, and what to avoid sending"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/embeddings": {
+      "get": {
+        "operationId": "getEmbeddingCatalog",
+        "summary": "List all available embedding models with their vector sizes and limits",
+        "description": "Embedding models are not in GET /catalog: a chat client would offer them as chat models.",
+        "responses": {
+          "200": {
+            "description": "Array of embedding model entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "name",
+                      "provider",
+                      "dimensions",
+                      "dimensions_adjustable",
+                      "max_input_tokens",
+                      "route",
+                      "residency"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Model deployment name (pass as 'model' in API requests)"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "Human-readable display name"
+                      },
+                      "provider": {
+                        "type": "string"
+                      },
+                      "dimensions": {
+                        "type": "integer",
+                        "description": "Length of the vectors the model returns by default"
+                      },
+                      "dimensions_adjustable": {
+                        "type": "boolean",
+                        "description": "Whether the 'dimensions' request parameter can shorten the vectors"
+                      },
+                      "max_input_tokens": {
+                        "type": "integer",
+                        "description": "Most tokens one input may hold"
+                      },
+                      "route": {
+                        "type": "object",
+                        "description": "Gateway route: method, path and query"
+                      },
+                      "residency": {
+                        "type": "string",
+                        "description": "DataZone (processed in the US data zone) or Global (may be processed outside the US)"
+                      },
+                      "retires": {
+                        "type": "string",
+                        "description": "Date Microsoft retires the model (YYYY-MM-DD)"
+                      },
+                      "notes": {
+                        "type": "string",
+                        "description": "Limits and quirks, such as the batch size and token limits per request"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/routers": {
+      "get": {
+        "operationId": "getRouterCatalog",
+        "summary": "List the model routers: models that pick another model for each request",
+        "description": "A router is not in GET /catalog: it serves Chat Completions only, and chat clients that are built from GET /catalog use the Responses API, so they could not call it. Each entry says which route to use.",
+        "responses": {
+          "200": {
+            "description": "Array of router entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "name",
+                      "provider",
+                      "context",
+                      "output",
+                      "mode",
+                      "models",
+                      "routes",
+                      "residency"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Model deployment name (pass as 'model' in API requests)"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "Human-readable display name"
+                      },
+                      "provider": {
+                        "type": "string"
+                      },
+                      "context": {
+                        "type": "integer",
+                        "description": "Context window in tokens: the smallest of the models the router can pick"
+                      },
+                      "output": {
+                        "type": "integer",
+                        "description": "Output limit in tokens: the smallest of the models the router can pick"
+                      },
+                      "mode": {
+                        "type": "string",
+                        "description": "Routing mode: balanced, cost or quality"
+                      },
+                      "models": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "The models the router can pick from"
+                      },
+                      "routes": {
+                        "type": "object",
+                        "description": "Gateway route for each API: method, path and query. An API the router does not serve is listed as null"
+                      },
+                      "residency": {
+                        "type": "string",
+                        "description": "DataZone (processed in the US data zone) or Global (may be processed outside the US)"
+                      },
+                      "retires": {
+                        "type": "string",
+                        "description": "Date Microsoft retires the router version (YYYY-MM-DD)"
+                      },
+                      "notes": {
+                        "type": "string",
+                        "description": "Limits and quirks of the router"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKeyHeader": {
+        "type": "apiKey",
+        "name": "x-api-key",
+        "in": "header",
+        "description": "Subscription key issued by the gateway."
+      },
+      "entraToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Microsoft Entra ID access token for the gateway API. Without a subscription key it is the only credential (the open product); a service product with Entra authentication requires it together with the key."
+      }
+    }
+  },
+  "security": [
+    {
+      "apiKeyHeader": []
+    },
+    {
+      "entraToken": []
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+---
+# Canonical CI lint gate. Runs the committed .pre-commit-config.yaml
+# against changed files only.
+#
+# Changed-file scope:
+#   pull_request      -> files changed vs. the PR base (origin/main).
+#   push to main      -> files changed in the push (before..HEAD).
+#   workflow_dispatch -> all files (safe fallback).
+#   push creating a branch (before = all zeros) -> all files, same fallback.
+#
+# Secrets: the pre-commit gitleaks hook only scans staged changes, which a CI
+# checkout never has, so it is skipped here and a dedicated step scans the
+# same commit range (full history for workflow_dispatch) with a pinned,
+# checksum-verified gitleaks release.
+
+name: Lint
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint (changed files)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Pixi
+        uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e  # v0.11.3
+        with:
+          pixi-version: v0.83.0
+          cache: false
+          frozen: true
+
+      - name: Install dev environment
+        run: pixi install -e dev
+
+      - name: Determine changed-file ref range
+        id: refs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            echo "from_ref=origin/${BASE_REF}" >> "$GITHUB_OUTPUT"
+            echo "to_ref=${SHA}"               >> "$GITHUB_OUTPUT"
+          elif [[ "$EVENT_NAME" == "push" && -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]]; then
+            echo "from_ref=${BEFORE}"          >> "$GITHUB_OUTPUT"
+            echo "to_ref=${SHA}"               >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch, or a push that creates the branch (BEFORE is
+            # all zeros): no usable range, so lint all files / scan everything.
+            echo "from_ref=" >> "$GITHUB_OUTPUT"
+            echo "to_ref="   >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run pre-commit (changed files)
+        id: pre_commit
+        env:
+          FROM_REF: ${{ steps.refs.outputs.from_ref }}
+          TO_REF: ${{ steps.refs.outputs.to_ref }}
+          # Scanned by the dedicated gitleaks step below.
+          SKIP: gitleaks
+        run: |
+          set -euo pipefail
+          if [[ -n "$FROM_REF" ]]; then
+            pixi run -e dev pre-commit run \
+              --from-ref "$FROM_REF" \
+              --to-ref   "$TO_REF"   \
+              --show-diff-on-failure \
+              --color always \
+              2>&1 | tee /tmp/pre-commit-output.txt
+          else
+            pixi run -e dev pre-commit run \
+              --all-files \
+              --show-diff-on-failure \
+              --color always \
+              2>&1 | tee /tmp/pre-commit-output.txt
+          fi
+
+      - name: Install gitleaks
+        if: always()
+        env:
+          GITLEAKS_VERSION: "8.30.1"  # keep in step with rev: in .pre-commit-config.yaml
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "${base}/${archive}"
+          curl -fsSLO "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " ${archive}\$" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          mkdir gitleaks-bin
+          tar -xzf "$archive" -C gitleaks-bin gitleaks
+          echo "${RUNNER_TEMP}/gitleaks-bin" >> "$GITHUB_PATH"
+
+      - name: Scan for secrets (gitleaks)
+        id: gitleaks
+        if: always()
+        env:
+          FROM_REF: ${{ steps.refs.outputs.from_ref }}
+          TO_REF: ${{ steps.refs.outputs.to_ref }}
+        run: |
+          set -euo pipefail
+          # git log -p prints no diff for merge commits, so a secret added while
+          # resolving a conflict is only seen with --diff-merges=first-parent.
+          # --log-opts replaces the gitleaks defaults, so the full-history scan
+          # restates --full-history --all.
+          if [[ -n "$FROM_REF" ]]; then
+            gitleaks git --redact --verbose --log-opts="--diff-merges=first-parent ${FROM_REF}..${TO_REF}"
+          else
+            gitleaks git --redact --verbose --log-opts="--full-history --all --diff-merges=first-parent"
+          fi
+
+      - name: Write job summary
+        if: always()
+        env:
+          PRE_COMMIT_OUTCOME: ${{ steps.pre_commit.outcome }}
+          GITLEAKS_OUTCOME: ${{ steps.gitleaks.outcome }}
+          FROM_REF: ${{ steps.refs.outputs.from_ref }}
+          TO_REF: ${{ steps.refs.outputs.to_ref }}
+        run: |
+          if [[ "$PRE_COMMIT_OUTCOME" == "success" && "$GITLEAKS_OUTCOME" == "success" ]]; then
+            BADGE="All linting hooks passed"
+          else
+            BADGE="One or more linting hooks failed"
+          fi
+
+          if [[ -n "$FROM_REF" ]]; then
+            SCOPE="\`${FROM_REF}\`..\`${TO_REF}\`"
+          else
+            SCOPE="all files (no commit range: manual run or new branch)"
+          fi
+
+          {
+            echo "## Lint results"
+            echo ""
+            echo "$BADGE"
+            echo ""
+            echo "**Scope:** changed files — ${SCOPE}"
+            echo ""
+            echo "### Hooks run"
+            echo ""
+            echo "| Hook | Tool | Version |"
+            echo "| ---- | ---- | ------- |"
+            echo "| trailing-whitespace / end-of-file-fixer | pre-commit-hooks | v5.0.0 |"
+            echo "| check-yaml / check-json / check-toml | pre-commit-hooks | v5.0.0 |"
+            echo "| check-added-large-files | pre-commit-hooks | v5.0.0 |"
+            echo "| codespell | codespell | 2.4.2 |"
+            echo "| markdownlint | markdownlint-cli | v0.48.0 |"
+            echo "| actionlint | actionlint | v1.7.12 |"
+            echo "| gitleaks (separate step, commit range) | gitleaks | v8.30.1 |"
+            echo "| bicep-build | az bicep build | system |"
+            echo ""
+            if [[ -s /tmp/pre-commit-output.txt ]]; then
+              echo "### Output"
+              echo ""
+              echo '```'
+              sed 's/\x1b\[[0-9;]*m//g' /tmp/pre-commit-output.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

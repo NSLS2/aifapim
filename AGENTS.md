@@ -1,10 +1,35 @@
 # AGENTS.md — aifapim
 
-Infrastructure-as-Code (Bicep) repo deploying Azure AI Foundry (AIServices) behind Azure API Management. Originally developed for NSLS-II at Brookhaven National Laboratory; forks welcome. No application code, no automated test suite, no build pipeline — post-deploy verification is the smoke-test workflow documented under "Verification via examples" below.
+Infrastructure-as-Code (Bicep) repo deploying Azure AI Foundry (AIServices)
+behind Azure API Management. Originally developed for NSLS-II at Brookhaven
+National Laboratory; forks welcome. No application code, no automated test
+suite, no build pipeline — post-deploy verification is the smoke-test workflow
+documented under "Verification via examples" below.
 
 ## What this repo is
 
-Pure Bicep IaC. There is no `npm install`, no Python package, no lint/typecheck step, and no CI. Changes are applied by running `az deployment group create` manually.
+Pure Bicep IaC. There is no `npm install`, no Python package and no
+automated test suite. CI only validates the repo: a lint gate
+(`.github/workflows/lint.yml`, the committed pre-commit hooks) and an advisory
+PSRule for Azure analysis (`.github/workflows/psrule.yml`). Nothing is
+deployed by CI: changes are applied by running `az deployment group create`
+manually, and post-deploy checks are the smoke test described under
+"Verification via examples/test-apim.py".
+
+### Lint and static analysis
+
+Run these before committing; CI repeats the lint on changed files.
+
+```bash
+pixi run --frozen -e dev lint-files <file1> <file2> ...   # changed files
+pixi run --frozen -e dev lint                             # everything
+pixi run -e dev lint-psrule                               # PSRule, manual
+```
+
+`lint-psrule` needs `pwsh`, the `PSRule.Rules.Azure` module and the Bicep
+CLI, and fails when a rule fails. It expands the stack through
+`aifapim.example.bicepparam`; rules that do not apply are excluded in
+`ps-rule.yaml` with the reason.
 
 ## Deployment commands
 
@@ -20,36 +45,75 @@ az deployment group create \
   --parameters aifapim-prod.bicepparam   # or whichever env file you copied
 ```
 
-Do **not** prefix `.bicepparam` files with `@` on the `--parameters` flag — that syntax is for raw JSON parameter files and causes the CLI to fail with `unrecognized template parameter 'using 'aifapim.bicep'...'`. For `.bicepparam`, pass the path directly.
+Do **not** prefix `.bicepparam` files with `@` on the `--parameters` flag —
+that syntax is for raw JSON parameter files and causes the CLI to fail with
+`unrecognized template parameter 'using 'aifapim.bicep'...'`. For
+`.bicepparam`, pass the path directly.
 
 The template file is **`aifapim.bicep`** (note: no hyphen).
 
-### Workbook only
+### Capture the output in a file
 
-```bash
-RG=<rg>
+The agent cannot run these commands, so when the operator runs a what-if, a
+deployment or a test, send the output to `~/Projects/Scratch/` as well as to
+the screen. The agent can then read the file instead of having it pasted.
 
-AI_ID=$(az resource list -g "$RG" \
-  --resource-type Microsoft.Insights/components \
-  --query "[?starts_with(name, 'appIn-')].id | [0]" -o tsv)
+- The operator's shell is zsh. Its pipe-status array is `pipestatus` and
+  starts at 1. In bash it is `PIPESTATUS`, starting at 0. A plain `$?` after
+  a pipe is the exit code of `tee`, which is always 0.
+- `az` has no `--no-color` flag. Set `AZURE_CORE_NO_COLOR=true` so colour
+  codes stay out of the file.
+- Errors go to a separate `.err` file, copied to the screen, so they do not
+  mix into JSON output.
 
-LAW_ID=$(az resource list -g "$RG" \
-  --resource-type Microsoft.OperationalInsights/workspaces \
-  --query "[?starts_with(name, 'law-')].id | [0]" -o tsv)
+```zsh
+AZURE_CORE_NO_COLOR=true az deployment group what-if -g <rg> \
+  --parameters <file>.bicepparam \
+  2> >(tee ~/Projects/Scratch/whatif-<env>.err >&2) \
+  | tee ~/Projects/Scratch/whatif-<env>.txt
+echo "exit=${pipestatus[1]}"
 
-az deployment group create \
-  -g "$RG" \
-  -f llm-token-usage-workbook.bicep \
-  -p applicationInsightsId="$AI_ID" logAnalyticsWorkspaceId="$LAW_ID"
+AZURE_CORE_NO_COLOR=true az deployment group create -g <rg> \
+  --parameters <file>.bicepparam --query properties.outputs -o json \
+  2> >(tee ~/Projects/Scratch/deploy-<env>.err >&2) \
+  | tee ~/Projects/Scratch/deploy-<env>.json
+echo "exit=${pipestatus[1]}"
 ```
 
-Both IDs are required: the workbook is associated with the App Insights component
-but its KQL queries target the Log Analytics workspace directly via
-`crossComponentResources`, because `AppMetrics` (the workspace-scoped custom-metric
-table) does not resolve under the component query scope. The template echoes both
-inputs as outputs (`applicationInsightsIdEcho`, `logAnalyticsWorkspaceIdEcho`) so
-the right wiring can be confirmed via `az deployment group show … --query
-properties.outputs` without REST-fetching the workbook's `serializedData`.
+For a test or a script that writes to both streams, use
+`<command> 2>&1 | tee ~/Projects/Scratch/<name>.txt`. Never tee anything that
+prints a secret (a subscription key, or a command that echoes one).
+
+Two zsh traps when handing the operator a command to paste:
+
+- **Quote `'If-Match=*'`** (for example
+  `az rest --method delete --headers 'If-Match=*' ...`). Unquoted, zsh treats
+  the `*` as a filename pattern and stops with `no matches found`, so nothing
+  runs. A script that passes it to `az` as an argument needs no quotes.
+- **No `<placeholder>` text in a pasted line.** zsh reads `<` and `>` as
+  redirections and the whole block fails to parse, usually running none of it.
+  Give a command that reads the value itself instead, for example
+  `KEY=$(az rest ... --query primaryKey -o tsv)`, or `read -rs "KEY?paste: "`.
+
+### Workbook
+
+**The canonical workbook now lives in the `aifapim-config` repo.** Deploy it
+from there; see `aifapim-config/AGENTS.md` §"Workbook deployment" for the full
+recipe and `aifapim-config/llm-token-usage-workbook.bicep` for the maintained
+source.
+
+The canonical workbook includes cost-analytics tiles and optional non-owner
+group read access (Monitoring Reader) in addition to the token-usage views. It
+is a separate `az deployment group create` from the main APIM stack, as it
+always was.
+
+This repo retains `llm-token-usage-workbook.example.bicep` — a
+**point-in-time snapshot** of the workbook as it stood before the move. It is
+an illustrative reference only; do **not** deploy it. The canonical version
+will diverge from this snapshot as cost tiles and other features are added. The
+2026-06 drift gotcha (commit `b0c4b86`, documented below) is the exact failure
+mode of running a stale copy — avoid it by always deploying from
+`aifapim-config`.
 
 ### Provision a user subscription key
 
@@ -65,47 +129,609 @@ az apim subscription create \
   --scope "/products/<apimProductName>"
 ```
 
-Fetch the keys with `az rest --method POST .../subscriptions/<name>/listSecrets?api-version=2023-03-01-preview`.
+Fetch the keys with
+`az rest --method POST .../subscriptions/<name>/listSecrets?api-version=2023-03-01-preview`.
 
 ## Key architecture facts
 
-- **Two regions**: `eastus` (label `eus`, primary index 0) and `eastus2` (label `eus2`, primary index 1). **`regions[1]` (eastus2) is the primary backend**; eastus is the failover.
-- **Three APIs** exposed via APIM, all grouped under a single configurable product (`apimProductName`, default `aifapim`), all using `x-api-key` header (not `Authorization: Bearer`):
-  - `azure-openai-service-api` — path `""` (root), OpenAI Chat/Completions, plus `GET /models?api-version=...` and `GET /models/{model_id}?api-version=...` (classic AOAI listing)
-  - `azure-openai-v1-messages-api` — path `openai`, OpenAI v1 Responses API (requires `openai>=1.66.0`), plus `GET /v1/models` and `GET /v1/models/{model}`
-  - `anthropic-service-api` — path `anthropic`, only `POST /v1/messages` and `POST /v1/messages/count_tokens`. Foundry returns 404 `api_not_supported` for `/anthropic/v1/models`; that route is intentionally not exposed.
-- **Anthropic models are only available on AI Foundry in select regions** (currently `eastus2`); this is a Foundry availability constraint, not a deployment choice. Populate Anthropic-format entries only in the `modelDeployments[i]` whose paired `regions[i].name` hosts them.
-- **APIM authenticates to AI Foundry via system-assigned managed identity** (no API keys to backends). End-users authenticate to APIM via APIM subscription keys.
-- **Private networking**: AI Foundry public access is disabled when a `subnetId` is provided. Three private DNS zones are required: `privatelink.openai.azure.com`, `privatelink.cognitiveservices.azure.com`, `privatelink.services.ai.azure.com`.
-- **Custom TLS**: Certificates must be stored as **secrets** (not certificates) in Key Vault. A user-assigned managed identity is created and granted Key Vault Secrets User *before* APIM is deployed to solve the chicken-and-egg problem.
-- **IP filtering**: All three APIM policies share an inbound `<ip-filter action="allow">` block populated at deploy time from the `allowedClientIps` parameter in the bicepparam files. Entries may be bare IPv4 addresses or CIDR ranges (CIDR is expanded via `parseCidr().firstUsable`/`lastUsable`, so the network and broadcast addresses are excluded). Typical contents are your client network range plus any provider-side egress IPs you need to allow (for example, the Anthropic egress IPs needed for `/anthropic/*` traffic on Foundry). The policy XML files contain a sentinel `__ALLOWED_CLIENT_IPS__` token, not a live IP list — `aifapim.bicep` substitutes it during compilation.
+- **Two regions**: `eastus` (label `eus`, primary index 0) and `eastus2`
+  (label `eus2`, primary index 1). **`regions[1]` (eastus2) is the primary
+  backend**; eastus is the failover.
+- **Four APIs** exposed via APIM, all using `x-api-key` header
+  (not `Authorization: Bearer`):
+  - `azure-openai-service-api` — path `""` (root), OpenAI Chat/Completions,
+    plus `GET /models?api-version=...` and
+    `GET /models/{model_id}?api-version=...` (classic AOAI listing).
+    Grouped under `apimProductName` product (default `aifapim`).
+  - `azure-openai-v1-messages-api` — path `openai`, OpenAI v1 Responses API
+    (requires `openai>=1.66.0`), plus `GET /v1/models` and
+    `GET /v1/models/{model}`.
+    Grouped under `apimProductName` product.
+  - `anthropic-service-api` — path `anthropic`, only `POST /v1/messages` and
+    `POST /v1/messages/count_tokens`. Foundry returns 404 `api_not_supported`
+    for `/anthropic/v1/models`; that route is intentionally not exposed.
+    Grouped under `apimProductName` product.
+  - `black-forest-labs-api` — path `providers/blackforestlabs/v1`, only
+    `POST /flux-2-pro`. Azure serves `FLUX.2-pro` only on Black Forest Labs'
+    provider route (the OpenAI-style routes return 404 for it), so it has its
+    own backends (`bfl-primary-backend`, `bfl-secondary-backend`), policy and
+    spec. The path is Azure's own, so a client changes only the host and the
+    key header. Backend host is `<account>.<bflEndpointDomain>`, default
+    `cognitiveservices.azure.com`; Microsoft's documented
+    `<account>.api.cognitive.microsoft.com` does not exist in DNS for these
+    accounts. The response is synchronous (`data[0].b64_json`). The policy
+    has no token limit and emits `Image Count`. `requestModel` (the `Model`
+    dimension, the usage record and the failover check) is the body's `model`,
+    kept only when it is a plain deployment name. `model` is required: without
+    it Azure answers 400 `no_model_name` (dev, 2026-11-14). Add another BFL
+    model path by adding an operation to `BlackForestLabs_OpenAPI.json`.
+    Grouped under `apimProductName` product and the service products.
+  - `mai-image-api` — path `mai/v1`, `POST /images/generations` (JSON) and
+    `POST /images/edits` (multipart, up to five reference images). Microsoft's
+    MAI image models use these routes on the account's `services.ai.azure.com`
+    host; the path is Azure's own. The models (`MAI-Image-2.6`,
+    `MAI-Image-2.6-Flash`) are deployed in the **secondary** (`eus`) account
+    only, so there is one backend (`mai-backend`) and no failover; 429 and 5xx
+    are retried on it. The policy refuses `web_grounding: true` with HTTP 400,
+    because that option sends the prompt to Bing, outside Foundry, and keeps
+    only a plain deployment name as the `Model` dimension of `Image Count`.
+    For a multipart edit it reads the form once into `formFields`, splitting on
+    the delimiter lines of the declared boundary and naming each field only from
+    its `Content-Disposition` header, so text inside a prompt or file cannot pose
+    as, or hide, a field. It refuses a `web_grounding` that is not `false` or
+    `0`, a repeated one, and any form it cannot read with certainty (no or
+    repeated `boundary`, no closing delimiter, an RFC 2231 `name*`). Check a
+    change to it with `pwsh -NoProfile -File tests/policy/mai-policy-test.ps1`:
+    it compiles the real expressions from the XML and runs 46 multipart and JSON
+    cases (needs PowerShell 7; it does not run APIM). It also fails when any
+    policy file uses a `Regex` member that APIM does not allow in an expression
+    (only `IsMatch`, `Match`, `Matches`, `Replace`, `Unescape` and `Split` are):
+    `Regex.Escape` passed every compiled case and still failed the first dev
+    deployment with a `ValidationError`, because only APIM checks that list.
+    Output is always one PNG; width and height are at least 768 with a total of
+    at most 2,359,296 pixels. Grouped under `apimProductName` product and the
+    service products.
+  - `catalog-api` — path `catalog`, `GET /catalog`, `GET /catalog/images` and
+    `GET /catalog/embeddings`.
+    `/catalog` returns a static
+    JSON array of chat-LLM models with `id`, `name`, `provider`, `context`,
+    and `output` fields baked in at deploy time from `model-catalog.json`
+    (in the `aifapim-config` repo, passed as the `catalogJson` param).
+    `/catalog/images` returns the image models, baked in from
+    `image-catalog.json` (the `imageCatalogJson` param): `id`, `name`,
+    `provider`, `create`, `edit`, `routes` (the gateway route for each
+    operation, because the families differ), `residency` and `retires`. It is
+    separate on purpose: ansible builds each workstation's OpenCode model
+    list from every `OpenAI` entry of `/catalog`, so an image model there would
+    be offered as a chat model and fail. The policy picks the body by
+    operation id (`getImageCatalog`).
+    `/catalog/embeddings` returns the embedding models, baked in from
+    `embedding-catalog.json` (the `embeddingCatalogJson` param): `id`, `name`,
+    `provider`, `dimensions` (the default vector length),
+    `dimensions_adjustable`, `max_input_tokens`, `route`, `residency`,
+    `retires` and `notes`. It is separate for the same reason as the image
+    catalog: an embedding model has provider `OpenAI`, so in `/catalog` it would
+    be offered as a chat model. Operation id `getEmbeddingCatalog`.
+    `/catalog/routers` returns the model routers, baked in from
+    `router-catalog.json` (the `routerCatalogJson` param): `id`, `name`,
+    `provider`, `context` and `output` (the smallest of the models it can
+    pick), `mode`, `models`, `routes` (the gateway route for Chat Completions
+    and `null` for Responses, which the router does not serve), `residency`,
+    `retires` and `notes`. It is separate because a router serves Chat
+    Completions only and every `OpenAI` entry of `/catalog` is offered to
+    OpenCode through the Responses API. Operation id `getRouterCatalog`; empty
+    (`[]`) where no router is deployed. The Llama models are served but are in
+    no catalog, on purpose.
+    Grouped under its own **`aifapim-catalog` product** (shown as "NSLS-II AIF
+    APIM Services (catalog poller)") — keys scoped to this product cannot call
+    any inference endpoint — and also in the user and service products. No
+    backend is contacted; the policy uses `<return-response>` in `<inbound>`
+    after `<base />`, so a product-level policy applies to it too. Used by the
+    ansible catalog poller to discover models and token windows at play-time.
+    **Route composition note:** APIM constructs the gateway route as
+    `<API path> + <operation urlTemplate>`. The catalog API uses
+    `path = 'catalog'` and `urlTemplate = '/'`, giving the effective route
+    `/catalog`; the `/images` and `/embeddings` operations give
+    `/catalog/images`, `/catalog/embeddings` and `/catalog/routers`. Do **not**
+    put `/catalog` in the OpenAPI operation path — that doubles the segment to
+    `/catalog/catalog` and produces a 404.
+- **Products** (the same on dev and prod). A key's product decides which
+  product-level policy applies to it, and a subscription's scope can be changed
+  in place (`PATCH` `properties.scope`), keeping its name and key values.
+
+  | Product ID | Display name | APIs | Keys | Product policy |
+  | --- | --- | --- | --- | --- |
+  | `apimProductName` (`nsls2aifapim`) | NSLS-II AIF APIM | 5 inference + `catalog-api` | people only: one key each, named by the Entra object id | none |
+  | `nsls2aifapim-services-external` | NSLS-II AIF APIM Services (external) | 5 inference + `catalog-api` | services (`svc-...`) | none |
+  | `nsls2aifapim-services-internal` | NSLS-II AIF APIM Services (internal) | 5 inference + `catalog-api` | on-site services | `ip-filter`: the NSLS-II NAT pool `130.199.137.0/28` |
+  | `aifapim-catalog` | NSLS-II AIF APIM Services (catalog poller) | `catalog-api` | `svc-catalog-poller` | none |
+  | the `open: true` entry of `serviceProducts` (at most one) | set in the parameter file | 5 inference + `catalog-api` | none: callers send an Entra token, no key | `Product_EntraOpen_Policy.xml`: the only access check |
+
+  The service products come from the `serviceProducts` parameter (each
+  `{ name, displayName, description, allowedClientIps?, entraAuth? }`), written
+  one at a time after the user product's links. Things to know:
+  - **`entraAuth` adds a Microsoft Entra ID token check to a product.** A
+    product with `entraAuth: { tenantId, audience, role }` gets its policy from
+    `apim_policies/Product_EntraAuth_Policy.xml` (with the same `ip-filter` when
+    it has `allowedClientIps`) instead of the IP-only template. The policy runs
+    `<validate-azure-ad-token>` on the `Authorization` header: tenant, audience
+    (the client ID of the gateway's Entra app, as a v2 token carries it), the
+    app role, `idtyp` = `app` and `azpacr` = `2` (certificate; a client secret
+    or a person's token is refused). The subscription key is still required, so
+    token limit, metrics and request log keep naming the caller by its
+    subscription, and a token is not tied to a particular key. The gateway keeps
+    no client list: who may get a token is decided by the role assignments in
+    Entra ID. **This repository is public**: the tenant, audience and role go in
+    the environment's own parameter file, never here (the example file has
+    placeholders). Products without `entraAuth` render exactly as before.
+  - **The open product (`open: true`) needs no key.** It is the one product that
+    keyless callers reach, per the APIM subscription documentation: a request
+    with no key, or a key that is not valid, is handled in the (single) open
+    product that holds the API; a request with a valid key is handled in the
+    key's own product. The APIs still have `subscriptionRequired: true`. The
+    product has `subscriptionRequired: false` and sends no
+    `approvalRequired` at all: APIM refuses any value for it, even `false`, when
+    no subscription is required (found on the first dev deploy).
+    - **Its policy is the only access check.** `Product_EntraOpen_Policy.xml`
+      is rendered only when `entraAuth` has `tenantId`, `audience`, `scope`
+      and `userRole` (`role` is not used); otherwise the product gets a policy that
+      answers 503, never the inheritance-only one (that would be anonymous
+      access). An API can be in
+      only one open product, so there is at most one; APIM's own refusal of a
+      second one is not verified.
+    - **People only; a service needs key AND token.** The policy reads
+      `idtyp` from the token before it is validated: an app token (`app`) is
+      refused with 403 `KeyRequired`. Anything else must pass the person
+      checks (signature, tenant, audience, `scp` holds `scope`, `roles` holds
+      `userRole`, and `client-application-ids` when `clientApplicationIds` is
+      set); an app token has no `scp`, so one that hides its `idtyp` still
+      fails. Why: APIM sends a request with no key, or with a key that is not
+      valid, to the open product. When it accepted app tokens (until
+      2026-11-14), a beamline agent could leave its key out or use a
+      suspended one, so switching a key off no longer stopped it, and the
+      agents product's NAT-pool lock was held only by the global allow-list.
+      Services call with key and token through the agents product
+      (`Product_EntraAuth_Policy.xml`), where both are checked.
+    - **The caller is the token's `oid`**, which must look like a GUID or the
+      request is refused with 401. The policy sets `callerId`, `callerName`
+      (the `name` claim), `callerType` (`user`) and `callerClient`, and
+      deletes `Authorization`. The five inference policies turn these into
+      `usageId` and `usageName` after their first `<base />`:
+      `context.Subscription == null ? caller : subscription`. **Nothing may read
+      `context.Subscription.Id` or `.Name` outside those two variables**: it is
+      null for a keyless request and the expression would throw. The test
+      `tests/policy/caller-policy-test.ps1` fails when one does.
+      `Subscription Name` is the subscription's display name, `Subscription ID`
+      its id (the object id for a person); the keyless values are the token's
+      `name` and `oid`, so a person is one series either way.
+    - **Usage trace.** With `usageTrace = true` the five inference policies write
+      an Application Insights trace (source `aifapim-usage`) through the
+      `<!-- __REQUEST_LOG__ -->` marker, which `aifapim.bicep` replaces with the
+      usage trace block, then the request body log block. `Properties` hold
+      `RequestId` (= `CorrelationId`), `CallerType` (`key`, `user` or `app`),
+      `CallerId`, `CallerName`, `Client`, `Api`, `Product` and `Model`. The
+      gateway log has no caller for a keyless request, so this is the record. The
+      custom metrics cap each dimension at 100 unique values and each namespace
+      at 1,000 time series (extra values are dropped silently), so they are not
+      a record of who used what.
+    - **Entra side (not in this repository: the `bicep` repository,
+      `entra/n2c.bicep`, module `aifapim`).** The gateway API app (N2SN AI
+      Gateway, shared by dev and prod) has a delegated scope
+      (`entraAuth.scope`, `access_as_user`) and a user app role
+      (`entraAuth.userRole`, `Inference.User`) besides the `Inference.Invoke`
+      role for services, and `requestedAccessTokenVersion` 2 (the audience is
+      the client ID). The NSLS2 N2C client is pre-authorized for the scope, the
+      role is assigned to groups, and "Assignment required" is on. Keep the
+      real IDs in the environment's parameter file: this repository is public.
+    - **Verified on dev, 2026-11-14** (person token through the N2C client,
+      from the NAT pool, `aifapim-dev.nsls2.bnl.gov`): a keyless request works
+      (`context.Subscription` is null, no error) for `/catalog`, Anthropic
+      (`claude-auto`) and OpenAI v1; a placeholder `x-api-key` is ignored and
+      falls through to the open product; no token, a garbage token and a valid
+      token for another API all get 401 from `validate-azure-ad-token`
+      (`TokenNotPresent`, `Invalid JWT.`, `Validation Failed`); the usage trace
+      lands in `AppTraces` and its `RequestId` equals the gateway's
+      `CorrelationId`; the token and metric rows name the caller (`Subscription
+      ID` is the `oid`, `Subscription Name` the `name` claim); the backend
+      accepts the call, so the caller's token is replaced and not forwarded.
+      The gateway log has no subscription for a keyless call, so the usage
+      trace is the only per-caller record. `ApiManagementGatewayLlmLog` has
+      several rows per request, with only one holding the tokens: count
+      requests with `dcount(RequestId)`.
+    - **A trace metadata value must never be empty.** APIM answers 500
+      (`ExpressionValueValidationFailure`, "The value field is required",
+      `LastErrorSource` `trace`) when one is. A keyed request has no client, so
+      the first dev run with `usageTrace` on returned 500 for every keyed
+      inference call until each value fell back to a dash. The keyless test
+      alone did not show it: run a keyed inference call too. A keyed call is
+      recorded with `CallerType` `key`, the subscription's id and display name,
+      and its own product; because subscriptions are named by the Entra object
+      id, a person's key and token give the same `CallerId`.
+    - **Write order: product, policy, then API links.** The token check is in
+      place before the product holds any API, and a failed policy write leaves
+      a product with no APIs. This only holds for a new product: setting
+      `open: true` on an existing keyed product flips it to keyless while its
+      old policy and links are still there. Add an open product under a new
+      name instead.
+    - **Switched off with `openProductEnabled = false`.** The open product is
+      still created (or kept), but its policy refuses every request with 401
+      `OpenProductDisabled`, so keyless callers get nothing; keyed callers are
+      unaffected because a valid key puts the request in its own product.
+      Switching off never removes the product: an incremental deployment does
+      not delete it, so the refusing policy is how it is closed.
+    - **Side effect:** creating the open product also created an active key for
+      APIM's built-in Administrator (owner `/users/1`). It does not skip the
+      token check (a valid key puts the request in its own product, so this
+      product's policy still runs), but delete it, as for any new product.
+    - **Not verified yet:** that an app-only token gets 403 on the gateway
+      (the expressions are tested, the deploy is not); that APIM refuses a
+      second open product.
+    - Check expressions with `pwsh -NoProfile -File
+      tests/policy/caller-policy-test.ps1` (fake context, unsigned tokens; it
+      does not run `validate-azure-ad-token`).
+  - **The internal lock sees the caller the gateway sees.** Clients that reach
+    `hermes.nsls2.bnl.gov` pass through a Signal Sciences WAF and arrive from
+    its AWS addresses, so an internal key only works when the caller is on
+    N2SN or NSLS2ACC and calls `aifapim.nsls2.bnl.gov` directly, from the NAT
+    pool. Through Hermes it gets a 403. The gateway never trusts
+    `X-Forwarded-For` for the lock.
+    - **What the WAF sends.** On 2026-10-31 (dev) it added only
+      `X-Amzn-Trace-Id`, `X-Sigsci-Requestid` and `X-Sigsci-Agentresponse`.
+      Since 2026-11-04 17:28 UTC (prod) it also adds `X-Forwarded-For`.
+    - **`X-Forwarded-For` is appended to, not replaced.** A test on
+      2026-11-04 sent `X-Forwarded-For: 192.0.2.99` through Hermes and the
+      gateway received `192.0.2.99,130.199.137.2`. Only the last entry is the
+      address the WAF saw; everything before it is client-controlled. Read the
+      last entry, never the first. Behind the BNL NAT that address is the NAT
+      pool, so it does not identify a host. If the lock were ever based on it,
+      it would have to take the last entry and apply only to requests whose
+      connecting address is one of the WAF's addresses.
+    - **Probable cause, not confirmed:** the Cloud WAF route setting "Trust
+      proxy headers" keeps a client's `X-Forwarded-For` when on and drops it
+      when off (Fastly Next-Gen WAF docs). The WAF's own client address is
+      read from the left-most entry by default, so a client could also fake
+      its address to the WAF. This is for the WAF team to check.
+    - **Logged request headers** (Application Insights `AppRequests`, as
+      `Request-<name>`): `X-Forwarded-For`, `X-Sigsci-Requestid`,
+      `X-Sigsci-Agentresponse`, `X-Sigsci-Tags`, `Fastly-Client-IP`,
+      `Fastly-Client`, `Fastly-FF` and `Fastly-SSL`. The request id finds the
+      request in the WAF console. Fastly documents the `Fastly-*` headers for
+      its CDN, not for Cloud WAF, so they may never appear; they are logged
+      to find out. A client can send its own `Fastly-Client-IP`, which Fastly
+      keeps unless the service overwrites it. Do not add `Fastly-Key` (an API
+      token) or any header that can carry a credential.
+    - **Outage, 2026-11-04.** From 14:08:48 to 17:08:55 UTC the WAF answered
+      every request itself with an empty `404` (`content-length: 0`, no
+      `request-context` header) and forwarded nothing. The gateway logged no
+      requests from the WAF's addresses and its policies were unchanged. Tell
+      a WAF answer from a gateway answer by the `request-context` header
+      (only the gateway adds it) and by `ApiManagementGatewayLogs` showing no
+      request from the WAF's addresses.
+  - **A product's `<ip-filter>` is in addition to the global allow-list** on
+    each API: both must pass. A CIDR in `allowedClientIps` covers its whole
+    range, network to broadcast (the global list uses usable addresses), so all
+    16 NAT pool addresses are accepted.
+  - **Every service product has a policy resource.** A product with no
+    `allowedClientIps` and no `entraAuth` gets an inheritance-only policy
+    (`<base />` in each section). An incremental deployment never deletes a
+    policy, so when the resource was skipped for an empty restriction, removing
+    `allowedClientIps` from the parameters left the old allow-list on the
+    product. Keys on such a product are now unrestricted again as soon as the
+    parameter is removed and deployed.
+  - **The product policy only runs where an API policy calls `<base />`.** All
+    four API policies do. The catalog policy used not to, and would have
+    skipped the lock.
+  - **`catalog-api` is in the user product on purpose.** Prod had it by hand;
+    the template now states it. The template creates links but never removes
+    them.
+  - **Creating a product also creates an active key for APIM's built-in
+    Administrator** (owner `/users/1`) on it. Nobody uses it, but it is a
+    working credential. After a deploy that adds a product, list the keys of
+    that product whose `ownerId` ends in `/users/1` and delete them (the
+    template cannot, because their names are generated). This happened on dev
+    and prod on 2026-10-30. The older ones on `aifapim-catalog` (dev
+    `6a567c97...`, prod `6a567f70...`) were kept on purpose.
+  - **A what-if always shows every product-to-API link as "Create".** That
+    resource type answers GET with 405, so what-if cannot see the links that
+    exist. Applying a link again is harmless. Check the real state with
+    `GET .../products/<id>/apis`.
+  - **The internal lock was tested on dev on 2026-10-30** with a throwaway key
+    on the internal product. From `130.199.137.2` (the NAT pool) `/catalog` and
+    inference both returned 200. From `130.199.218.21` (BNL, outside the pool)
+    `/catalog` returned 403, with `LastErrorReason` `CallerIpNotAllowed`,
+    `LastErrorScope` `product` and `LastErrorSource` `ip-filter`. No lock test
+    was run on prod.
+  - Product IDs cannot be renamed, so `aifapim-catalog` and `nsls2aifapim`
+    keep their IDs and only their display names and descriptions change.
+- **Anthropic models are available on AI Foundry in select regions only.**
+  As of 2026-07: `eastus2` has the full catalog; `eastus` carries a partial
+  subset (`claude-haiku-4-5`, `claude-opus-4-8`, `claude-sonnet-5`). Populate
+  Anthropic-format entries only in the `modelDeployments[i]` whose paired
+  `regions[i].name` actually hosts them — verify with
+  <!-- markdownlint-disable-next-line MD013 -->
+  `az cognitiveservices model list -l <region> --query "[?contains(model.name,'claude')].model.name" -o tsv`
+  before adding entries.
+- **Inference retry policies do NOT retry on 404.** A 404 from primary
+  (eastus2) means the deployment does not exist there — failing over to
+  secondary (eastus) is counterproductive because eastus carries fewer
+  models, and once a retry switches to the secondary the policy never
+  returns to the primary, so the secondary's 404 hides the real error
+  (for example a 429 from eastus2). The retry condition in all five of
+  `apim_policies/{AOAI,OpenAIv1Messages,Anthropic,BlackForestLabs,MAI_Image}_Policy-Managed_Identity_with_Retry[_MultiRegion].xml`
+  only retries on 429 (rate limit) and 5xx (server errors). Do not add 404
+  back. Do not add `<base />` to the `<backend>` section either: APIM
+  allows one backend policy, and `<base />` plus `<retry>` fails deploy
+  validation (see `7b299f5`, which also reverted this fix by accident).
+- **Inference retry policies fail over only for models the secondary has.**
+  Each policy sets `canFailover` in `<inbound>` from the request's model
+  (body `model` for Anthropic and OpenAI v1, the path segment after
+  `deployments` for AOAI) and checks it against `__SECONDARY_MODELS__`,
+  which `aifapim.bicep` fills with `'|name|name|'` from `modelDeployments[0]`
+  (the secondary region). Models not in that list (all Claude models today)
+  retry against the primary with the normal backoff. Why: on 2026-10-23 a
+  prod `eastus2` connection reset (`BackendConnectionFailure`, socket error
+  10054, about 19 s in) on 14 Claude requests triggered failover to `eastus`,
+  which has no Claude deployments, and clients saw a 404 "deployment does
+  not exist" instead of a retry. Azure metrics showed no 429s or 5xx from
+  `eastus2` in that window. If Claude is later deployed in `eastus`, add it
+  to `modelDeployments[0]` and it will fail over automatically.
+- **Model router** (`model-router`, Microsoft's trained router, format
+  `OpenAI`) is a deployment like any other, reached through
+  `/deployments/model-router/chat/completions` (or `/openai/v1/chat/completions`);
+  clients name it as the `model`. **It is Chat Completions only:** on dev,
+  2026-11-11, `/openai/v1/responses` answered HTTP 400 "The requested
+  operation is unsupported" (the same is reported for OpenCode,
+  opencode#52113). Clients that speak only Responses, which includes the
+  OpenCode provider that ansible builds from `/catalog` (`@ai-sdk/openai`),
+  cannot use it, so it is not in `/catalog`; it is listed at
+  `GET /catalog/routers` instead (see `aifapim-config`).
+  It picks one of the models in the entry's `routing.models` per request (mode
+  `balanced`, `cost` or `quality`) and names it in the answer's `model` field,
+  so a catalog entry's context window would be the smallest of those models.
+  Things to know:
+  - `modules/aif-deployments.bicep` passes `routing` through and applies
+    `raiPolicyName` to it (the content filter is otherwise `gpt-` only).
+    Azure accepted `routing` in API version `2025-10-01-preview` on dev.
+  - Use `DataZoneStandard`. Its quota is `OpenAI.DataZoneStandard.ModelRouter`
+    (4000 in all: **one pool for the whole subscription, counted across both
+    regions and both environments**, not per region. `az cognitiveservices
+    usage list` shows the same total in each region. A first prod deploy asked
+    for 2000 in each region and failed with `InsufficientQuota` because dev
+    already held 1000. Check the free total before sizing a router; the split
+    is in the capacity comments of the parameter files). Version `2025-11-18`
+    is updated in place by Microsoft and retires
+    2027-05-20. The router needs no separate deployment of the models it picks,
+    except Claude, which it cannot route for us: it speaks the OpenAI format
+    only, so Claude is routed by `claude-auto` below instead.
+  - The gateway's `Model` dimension says `model-router`, not the model that
+    answered (that is in the response body). The cost mapping needs a router
+    entry once its meters show in Cost Management; do not guess them.
+- **`claude-auto`** is a model name of the Anthropic API, not a deployment.
+  With the `claudeAuto` parameter set (`classifierModel`, `simpleModel`,
+  `mediumModel`, `complexModel`, all deployments in the primary region) the
+  Anthropic policy loads `apim_policies/ClaudeAuto_Fragment.xml` at the
+  `<!-- __CLAUDE_AUTO__ -->` marker. When the request's `model` is
+  `claude-auto` it:
+  1. takes the last user message that has text (tool results are skipped, so
+     the turns of one agent run are rated alike), cut to 2000 characters;
+  2. sends it to the classifier model on the primary account with
+     `send-request` (5 s timeout, direct to Foundry, so it does not pass
+     through the gateway again and is not counted by the caller's token
+     limit) and reads `simple`, `medium` or `complex`. The request sends no
+     `temperature`: the 5.x Claude models refuse it (Microsoft Learn), and a
+     refused classifier call would rate every request complex;
+  3. rewrites `model` in the body, and sets `requestModel`, so the failover
+     check, token metrics and the `Model` dimension see the real model.
+  A classifier error, timeout or odd answer gives `complexModel` (the safe
+  choice); `count_tokens` is not rated and uses `complexModel`. The response
+  has `x-aifapim-routed-model` and `x-aifapim-route-tier`. The classifier's
+  tokens are the `Claude Auto Classifier Tokens` metric (`Model` = the
+  classifier). It is listed in `/catalog` as an Anthropic model (windows: the
+  smallest of its three models), so OpenCode offers it through the Anthropic
+  provider; every environment that deploys that catalog must set
+  `claudeAuto`. The request body log keeps the body the client sent. It is a
+  cost aid, not an access control: a request can word itself to be rated
+  simple, and anyone can name a model directly. Switching models between
+  turns loses the prompt cache. Not verified until the first dev run: that
+  the expressions compile on the gateway (there is no local APIM), that
+  Claude Code accepts the model name, and the classifier's latency.
+- **Image models** (Black Forest Labs FLUX, format `'Black Forest Labs'`)
+  are deployed as `DataZoneStandard` so processing stays in the US data zone.
+  `FLUX.2-pro` and `FLUX.1-Kontext-pro` create and edit images; `FLUX-1.1-pro`
+  creates only. They live in `modelDeployments` like any other model, with
+  these differences:
+  - `capacity` is required (`modules/aif-deployments.bicep` has no default for
+    formats other than OpenAI and Anthropic) and is counted in requests per
+    minute, not tokens.
+  - The `DataZoneStandard` quota is **one pool per subscription**, shared by
+    both regions and by every Foundry account in it (prod, dev and others),
+    like the `gpt-6-astra` pool. Check it with
+    `az cognitiveservices usage list -l <region>`
+    (`AIServices.DataZoneStandard.FLUX.2-pro` and so on) before choosing
+    capacities, and keep the sum over all deployments at or below the limit.
+  - They are served under `api-version=preview`, return base64 images, and
+    are reached through `POST /deployments/{name}/images/{generations,edits}`
+    (root API) and `POST /openai/v1/images/{generations,edits}` (v1 API). The
+    `images/edits` operations are local additions to the specs (upstream
+    2024-10-21 has no edits).
+  - Both inference policies skip the token limit and token metric policies
+    when the path contains `/images/`, and emit an `Image Count` metric
+    (value = images in the response `data`) in `<outbound>` instead. The v1
+    policy reads `model` from a multipart body (edits) with the same
+    `formFields` reader as the MAI policy, so a prompt that imitates a
+    `model` part is not taken for it (verified on dev, 2026-11-14: such an
+    edit was recorded as `gpt-image-2.5-flare`).
+  - **Image requests are limited per caller** (`imageRequestsPerMinute`,
+    default 10 per minute), because the token limit does not cover them. The
+    AOAI (paths with `/images/`), v1 (same), Black Forest Labs and MAI policies
+    each run `rate-limit-by-key` with the counter key `images:` + `usageId`,
+    so one counter per caller (subscription, or the token's object id for a
+    keyless caller) is shared by every image route. Over the limit APIM
+    answers 429 with `Retry-After`. It runs after `usageId` is set and before
+    the request body log, so a refused request is neither sent nor stored.
+    `tests/policy/caller-policy-test.ps1` checks the key and the position.
+    Added after a security review of the open product (2026-11-14): without
+    it one token holder could use all image capacity and run up charges.
+  - They are not added to `model-catalog.json`: `/catalog` lists chat models
+    with token windows only. Image models are in `/catalog/images`.
+  - The other image models (`gpt-image-*`, `MAI-Image-*`, `FLUX.2-flex`) offer
+    only `GlobalStandard`, which can process outside the US. The operator
+    accepted that for image models on 2026-11-01, so `gpt-image-2.5-flare`,
+    `gpt-image-2.5-sunburst`, `MAI-Image-2.6` and `MAI-Image-2.6-Flash` are
+    deployed as `GlobalStandard`; the `/catalog/images` entry says `Global`.
+    The `gpt-image-*` models use the OpenAI v1 image routes (they are in
+    eastus2 only), the MAI models the `mai-image-api` (eastus only).
+- **APIM authenticates to AI Foundry via system-assigned managed identity**
+  (no API keys to backends). End-users authenticate to APIM via APIM
+  subscription keys.
+- **Private networking**: AI Foundry public access is disabled when a
+  `subnetId` is provided. Three private DNS zones are required:
+  `privatelink.openai.azure.com`,
+  `privatelink.cognitiveservices.azure.com`,
+  `privatelink.services.ai.azure.com`.
+- **NSG lateral-traversal rule + private endpoint carve-out**: Both NSGs
+  (`modules/network.bicep` for the APIM subnet, `modules/vnet.bicep` for all
+  other subnets) include `Deny_Lateral_Outbound_VirtualNetwork` (priority 4096,
+  `VirtualNetwork → VirtualNetwork Deny *`) to satisfy PSRule
+  `Azure.NSG.LateralTraversal`. This rule also blocks APIM's outbound HTTPS to
+  the AI Foundry private endpoint IPs (which fall under the `VirtualNetwork`
+  service tag). The companion rule `Allow_Outbound_To_Private_Endpoints`
+  (priority 300, `VirtualNetwork → VirtualNetwork Allow TCP 443`) carves out
+  the specific path APIM needs. **Do not remove either rule without
+  understanding the dependency** — removing the allow rule causes all backend
+  requests to hang silently; removing the deny rule breaks PSRule compliance.
+  The same pattern covers the rest of APIM's lateral traffic, each rule at a
+  lower priority number than the deny: node-to-node cache (TCP 6381-6383, 310)
+  and rate-limit counter sync (UDP 4290, 320), which matter once the service
+  has more than one unit (Premium), and AMQP (TCP 5671-5672, 330) to the Event
+  Hub private endpoint.
+- **Event Hub**: `modules/event-hub.bicep` creates a namespace with local auth
+  and public network access disabled, reached only through a private endpoint
+  (group `namespace`) in the `openai` subnet of `regions[0]` and registered in
+  `privatelink.servicebus.windows.net`, linked to that VNet. Private endpoints
+  need the Standard or Premium SKU. The namespace and the APIM Data Sender role
+  are provisioned, but no APIM logger sends to it yet (only the Application
+  Insights logger exists); it is not used by `aifapim-config`.
+- **Request body log** (`requestBodyLogging`, off by default): the built-in
+  LLM log (`ApiManagementGatewayLlmLog`) drops the prompt of Anthropic requests
+  whose `system` field is a list of blocks (measured 2026-10: a plain-string
+  `system` is logged, a list is not, with or without `cache_control`; replies
+  are still logged), which is what Claude Code and OpenCode send. When the
+  switch is true, `apim_policies/RequestBodyLog_Fragment.xml` replaces the
+  `<!-- __REQUEST_LOG__ -->` marker in `<inbound>` of the five inference
+  policies. It writes the raw body of every POST to a write-once blob with
+  `<send-one-way-request>` (managed identity, `If-None-Match: *`, fire and
+  forget, name = request id = `CorrelationId`). `modules/request-log.bicep`
+  builds the rest: the data storage account (private endpoint, shared-key
+  access off, container-level time-based immutability, Hot to Cold at 7 days
+  to Archive at 90, no delete), Event Grid `BlobCreated` to a queue on a host
+  storage account, a Flex Consumption function app in a delegated subnet of
+  `regions[0]`'s VNet (private subnet with no internet route, private
+  endpoints for the host storage), an Azure Monitor private link scope with a
+  private endpoint (`request-log-ampls.bicep`), and a separate
+  `law-prompts-<unique>` workspace with the custom table `LlmRequestBody_CL`
+  behind a data collection rule. The
+  function code is in `aifapim-config` (`request-log/`), with its operator
+  runbook. Things to know:
+  - The immutability policy is created **unlocked**. Locking is irreversible
+    and is a separate operator script. After locking, set
+    `requestLogManageImmutabilityPolicy = false` so a redeploy does not try to
+    rewrite the locked policy.
+  - **The data account's network bypass must be `AzureServices`.** Creating
+    the Event Grid subscription makes Event Grid configure storage
+    notifications on the account, and with `bypass: None` the deployment
+    fails with `NetworkAclsBypassAzureServicesNotPermitted` (the message
+    shows up as a `listAccountSas` 400 inside "Storage Notification"). The
+    default action stays `Deny`, so only the trusted-service path is opened,
+    and shared-key access is off, so a trusted service still needs an Entra
+    role. If a later run fails with a `keyToSign` error instead, shared-key
+    access being off is the next suspect.
+  - **No public IP addresses.** A BNL management-group policy ("Deny public
+    IPs", `Not allowed resource types`) blocks
+    `Microsoft.Network/publicIPAddresses`, so a NAT gateway cannot be used
+    (the first dev deployment failed on it). The AIFAPIM VNets are not
+    connected to the BNL hub, whose spoke route table sends `0.0.0.0/0` to a
+    firewall in another subscription. The function therefore reaches the Logs
+    Ingestion endpoint through an Azure Monitor private link scope (AMPLS).
+  - The AMPLS private endpoint writes private records for the Azure Monitor
+    names into four private DNS zones for every client of the `regions[0]`
+    VNet, including the gateway's Application Insights logger. Both access
+    modes are `Open`, so Azure Monitor resources outside the scope stay
+    reachable publicly. The scope holds the collection endpoint, the prompts
+    workspace, Application Insights and the main workspace. Use one scope per
+    DNS: do not add a second AMPLS endpoint to this VNet.
+  - The workspace copy is not isolated from subscription-level `Reader` (it
+    includes `*/read`), Owner or Contributor. Only the blobs are protected by
+    data-plane roles.
+  - The gateway identity holds Storage Blob Data Contributor with an ABAC
+    condition (`conditionVersion` 2.0) that removes the read, delete and move
+    data actions. The control-plane `generateUserDelegationKey` action in that
+    role cannot be restricted by a condition.
+  - Flex Consumption rejects some site properties (`ftpsState`, `alwaysOn`).
+    Keep `siteConfig` to `appSettings`, and do not set
+    `FUNCTIONS_WORKER_RUNTIME` or the other deprecated settings.
+  - The Flex Consumption subnet cannot also be used for service endpoints, so
+    storage is reached through private endpoints, like AI Foundry.
+  - The blob endpoint in the policy is substituted from
+    `environment().suffixes.storage`; do not hard-code it. The marker and the
+    `__REQUEST_LOG_*__` placeholders are replaced everywhere they appear, so
+    keep them out of other comments.
+  - A write failure never reaches the client (fire and forget). Watch
+    `StorageBlobLogs` and the `verify.sh` reconciliation instead.
+- **Custom TLS**: Certificates must be stored as **secrets** (not
+  certificates) in Key Vault. A user-assigned managed identity is created and
+  granted Key Vault Secrets User *before* APIM is deployed to solve the
+  chicken-and-egg problem.
+- **IP filtering**: All five inference policies share an inbound
+  `<ip-filter action="allow">` block populated at deploy time from the
+  `allowedClientIps` parameter in the bicepparam files. Entries may be bare
+  IPv4 addresses or CIDR ranges (CIDR is expanded via
+  `parseCidr().firstUsable`/`lastUsable`, so the network and broadcast
+  addresses are excluded). Typical contents are your client network range plus
+  any provider-side egress IPs you need to allow (for example, the Anthropic
+  egress IPs needed for `/anthropic/*` traffic on Foundry). The policy XML
+  files contain a sentinel `__ALLOWED_CLIENT_IPS__` token, not a live IP list
+  — `aifapim.bicep` substitutes it during compilation.
 
 ## Module layout
 
-```
-aifapim.bicep                   # Orchestrator — start reading here
-aifapim.example.bicepparam      # Parameter template — copy to aifapim-<env>.bicepparam and customize
-llm-token-usage-workbook.bicep  # Standalone workbook deployment
+```text
+aifapim.bicep                           # Orchestrator — start reading here
+aifapim.example.bicepparam              # Parameter template — copy to aifapim-<env>.bicepparam and customize
+model-catalog.example.json              # Example GET /catalog body loaded by the example parameter file
+llm-token-usage-workbook.example.bicep  # Reference snapshot only — NOT deployed (canonical in aifapim-config)
 modules/
   aif.bicep                     # AI Foundry account + private endpoint
   aif-deployments.bicep         # Model deployments (sub-module; avoids race on account provisioning)
   api-management-private.bicep  # APIM instance, custom domains, CA certs
-  api.bicep                     # All three APIs, backends, product, diagnostics
+  api.bicep                     # All five inference APIs, the catalog API, backends, product, diagnostics
   app-insights.bicep            # Application Insights
   cognitive-services-role.bicep # Cognitive Services / AI User RBAC for APIM system identity
-  event-hub.bicep               # Event Hub for APIM logging
+  event-hub.bicep               # Event Hub namespace (private endpoint only; not wired to an APIM logger yet)
   keyvault-role.bicep           # Key Vault RBAC for APIM user-assigned identity
   llm-latency-alerts.bicep      # Scheduled-query latency alerts on ApiManagementGatewayLogs
   log-analytics-workspace.bicep # Log Analytics workspace
   network.bicep                 # APIM subnet (added to regions[0] vnet)
-  private-dns-zone.bicep        # Private DNS zone for AI Foundry endpoints
-  role.bicep                    # Generic role-assignment helper
+  private-dns-zone.bicep        # Private DNS zone (AI Foundry endpoints, Event Hub, request log storage)
+  request-log.bicep             # Request body log wrapper (optional; requestBodyLogging)
+  request-log-storage.bicep     #   WORM data storage account, lifecycle, blob private endpoint
+  request-log-function.bicep    #   Loader function app, private subnet, host storage, Event Grid, roles
+  request-log-ampls.bicep       #   Azure Monitor private link scope, private endpoint and DNS zones
+  request-log-workspace.bicep   #   law-prompts workspace, LlmRequestBody_CL table, DCE and DCR
+  storage-private-endpoint.bicep # Private endpoint + DNS zone group for a storage account
   vnet.bicep                    # Virtual network
 apim_policies/                  # APIM policy XML (loaded inline via loadTextContent)
+                                #   RequestBodyLog_Fragment.xml  (inserted into the five inference policies)
+                                #   BlackForestLabs_Policy-...MultiRegion.xml  (FLUX.2-pro provider route)
+                                #   MAI_Image_Policy-...Retry.xml  (MAI image routes; one backend)
+                                #   Catalog_Policy.xml  (return-response; no backend)
 api_definitions/                # OpenAPI specs (loaded inline via loadTextContent):
                                 #   AzureOpenAI_inference_2024-10-21.yaml  (root API; vendored from azure-rest-api-specs)
                                 #   AzureOpenAI_v1_Messages_OpenAPI.json   (v1 Messages API)
                                 #   AzureAnthropic_OpenAPI.json            (Anthropic Messages API)
+                                #   BlackForestLabs_OpenAPI.json           (POST /flux-2-pro; Black Forest Labs route)
+                                #   MAI_Image_OpenAPI.json                 (POST /images/generations and /images/edits)
+                                #   Catalog_OpenAPI.json                   (GET /catalog, /catalog/images and /catalog/embeddings; static model lists)
 resources/                      # User-supplied CA PEMs loaded via loadTextContent
                                 # in the bicepparam file (intermediateCaCert /
                                 # rootCaCert params). Gitignored except .gitkeep.
@@ -113,13 +739,41 @@ resources/                      # User-supplied CA PEMs loaded via loadTextConte
 
 ## Policies and API specs are loaded inline
 
-`aifapim.bicep` uses `loadTextContent(...)` to embed policy XML and OpenAPI specs at compile time. Editing a file in `apim_policies/` or `api_definitions/` requires a new `az deployment group create` to take effect — there is no live reload.
+`aifapim.bicep` uses `loadTextContent(...)` to embed policy XML and OpenAPI
+specs at compile time. Editing a file in `apim_policies/` or `api_definitions/`
+requires a new `az deployment group create` to take effect — there is no live
+reload.
 
-The same applies to `llm-token-usage-workbook.bicep`: the workbook JSON is built inline from `var workbookContent` and embedded as `serializedData`. Workbook deploys are **in-place upserts** keyed by `guid(resourceGroup().id, workbookDisplayName)`, so the workbook resource GUID and Azure Portal URL/bookmarks are preserved across redeploys. Any change to the embedded queries, parameters, or display elements requires a fresh `az deployment group create -f llm-token-usage-workbook.bicep …` per environment — there is no auto-propagation from a `git pull` until you redeploy.
+The same applies to `llm-token-usage-workbook.bicep`: the workbook JSON is
+built inline from `var workbookContent` and embedded as `serializedData`.
+Workbook deploys are **in-place upserts** keyed by
+`guid(resourceGroup().id, workbookDisplayName)`, so the workbook resource GUID
+and Azure Portal URL/bookmarks are preserved across redeploys. Any change to
+the embedded queries, parameters, or display elements requires a fresh
+`az deployment group create -f llm-token-usage-workbook.bicep …` per
+environment — there is no auto-propagation from a `git pull` until you
+redeploy.
 
-Historical gotcha (2026-06): commit `b0c4b86` fixed the workbook to scope queries at the Log Analytics workspace (`microsoft.operationalinsights/workspaces` + `crossComponentResources`) instead of the App Insights component, but the fix was deployed to dev only. Prod's portal-rendered workbook stayed stuck on the pre-fix `microsoft.insights/components` scope which cannot resolve `AppMetrics`, producing `'where' operator: Failed to resolve table or column expression named 'AppMetrics'` on every tile. Diagnose by REST-GETting `https://management.azure.com/.../workbooks/{guid}?api-version=2023-06-01&canFetchContent=true` and inspecting `properties.serializedData.items[*].content.{resourceType,crossComponentResources}`. Fix: redeploy via the command in the "Workbook only" section above.
+Historical gotcha (2026-06): commit `b0c4b86` fixed the workbook to scope
+queries at the Log Analytics workspace
+(`microsoft.operationalinsights/workspaces` + `crossComponentResources`)
+instead of the App Insights component, but the fix was deployed to dev only.
+Prod's portal-rendered workbook stayed stuck on the pre-fix
+`microsoft.insights/components` scope which cannot resolve `AppMetrics`,
+producing
+`'where' operator: Failed to resolve table or column expression named 'AppMetrics'`
+on every tile. Diagnose by REST-GETting
+`https://management.azure.com/.../workbooks/{guid}?api-version=2023-06-01&canFetchContent=true`
+and inspecting
+`properties.serializedData.items[*].content.{resourceType,crossComponentResources}`.
+Fix: redeploy via the command in the "Workbook only" section above.
 
-All three OpenAPI specs are embedded from local files in `api_definitions/`. The Azure OpenAI data-plane inference spec is a vendored copy of the upstream stable `2024-10-21/inference.yaml` from the Azure REST API specs repo, pinned locally for deterministic deploys (deploys no longer depend on github.com being reachable). The local copy is augmented with `/models` and `/models/{model_id}` listing operations, which are not part of the upstream data-plane spec.
+All the OpenAPI specs are embedded from local files in `api_definitions/`.
+The Azure OpenAI data-plane inference spec is a vendored copy of the upstream
+stable `2024-10-21/inference.yaml` from the Azure REST API specs repo, pinned
+locally for deterministic deploys (deploys no longer depend on github.com being
+reachable). The local copy is augmented with `/models` and `/models/{model_id}`
+listing operations, which are not part of the upstream data-plane spec.
 
 ### Refreshing the vendored AOAI spec
 
@@ -130,21 +784,102 @@ curl -sS -o api_definitions/AzureOpenAI_inference_2024-10-21.yaml \
   https://raw.githubusercontent.com/Azure/azure-rest-api-specs/refs/heads/main/specification/cognitiveservices/data-plane/AzureOpenAI/inference/stable/2024-10-21/inference.yaml
 ```
 
-Then re-apply the local `/models` and `/models/{model_id}` path additions (they are not in upstream) and redeploy. Diff against the previous version before committing to confirm no unexpected upstream operation changes.
+Then re-apply the local changes (none of them is in upstream) and redeploy:
+the `/models`, `/models/{model_id}` and `images/edits` path additions, and
+the security schemes. Upstream declares Azure's `api-key` header and an OAuth
+flow; every spec in `api_definitions/` must declare the gateway's instead,
+`apiKeyHeader` (the `x-api-key` header) and `entraToken` (HTTP bearer), at the
+top level. `tests/policy/caller-policy-test.ps1` fails when a spec declares any
+other scheme. Diff against the previous version before committing to confirm
+no unexpected upstream operation changes.
+
+## Developer SKU ServiceLocked race
+
+On Developer SKU APIM (`apiManagementSku = 'Developer'`, single unit, no
+redundancy) every `az deployment group create` triggers a service-level
+mutation, and the single-instance service transitions while child writes
+land. With unserialized fan-out across the ~19 child resources in
+`modules/api.bicep` (backends, five APIs, five policies, five per-API
+diagnostics, service diagnostic, product, five product/api links), ARM
+deterministically fails the `api-management` nested deployment with
+`ServiceLocked: The API Service apim-<unique> is transitioning at this
+time`. The service itself is healthy (`provisioningState: Succeeded`)
+between attempts, so retrying without a fix loops forever.
+
+Two interventions in this repo prevent the race:
+
+1. **Service-level property pinning** in
+   `modules/api-management-private.bicep`. `publicNetworkAccess: 'Enabled'`
+   and `legacyPortalStatus: 'Disabled'` are set explicitly so ARM does not
+   force-mutate them on every deploy. They match the platform-default live
+   state on External-VNet Developer SKU. `natGatewayState` is intentionally
+   left omitted: its live value is the read-only `Unsupported` state on
+   Developer SKU and supplying it as input risks rejection. The residual
+   one-property service diff (if any) is absorbed by intervention #2.
+2. **Linear `dependsOn` serialization** in `modules/api.bicep`. Every child
+   resource is chained so backends → APIs → policies → diagnostics →
+   product → product/api links land sequentially, not in parallel. The
+   chain is documented inline at each resource. The edges that serialize
+   the writes are the ones between sibling resources; a `parent:` already
+   adds an implicit dependency on the parent, so listing the parent again
+   in `dependsOn` (which the bicep linter flags) adds no ordering and is
+   left out. Do NOT remove the sibling edges without a replacement
+   serialization strategy.
+
+Tradeoff: deploys are slower (sequential child writes against a single
+APIM unit) in exchange for determinism. On Standard/Premium tiers with
+multi-unit redundancy this race does not occur and the chaining is a
+no-op cost-wise; the pinning is also harmless on those tiers.
 
 ## Token usage analytics quirks (verified on Developer SKU)
 
-- **Anthropic completion tokens are always 0 in BOTH `AppMetrics.Completion Tokens` AND `ApiManagementGatewayLlmLog.CompletionTokens`** — streaming and non-streaming alike. APIM's classic-tier LLM diagnostic does not parse `usage.output_tokens` from Anthropic Messages API responses. The Anthropic policy XML (`apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml`) compensates with an `<outbound>` `<emit-metric>` block that reads `usage.output_tokens` from the response body and emits an `Anthropic Completion Tokens` custom metric (namespace = the configured `apimProductName`).
-- **Anthropic streaming completion tokens remain unmeasurable**. The `<outbound>` `<emit-metric>` block is gated on a `requestIsStream` flag captured in `<inbound>`; SSE-streamed responses cannot be parsed as a single JSON object via `context.Response.Body.As<JObject>()`. Streaming Anthropic rows in the workbook show `Completion = 0`. No workaround on classic-tier APIM.
-- **Anthropic streaming `ModelName` is always empty in `LlmLog`**. Use `DeploymentName` from the same row or `Properties.Model` from `AppMetrics` (the `<llm-emit-token-metric>` policy on the Anthropic API extracts the model from the request body and emits it as a dimension).
-- Custom policy metrics (`<llm-emit-token-metric>` dimensions and the explicit `Anthropic Completion Tokens` emit) all land in `AppMetrics` under the namespace given by `apimProductName` (substituted into the policy XML at deploy time via the `__METRIC_NAMESPACE__` sentinel).
+- **Anthropic completion tokens are always 0 in BOTH
+  `AppMetrics.Completion Tokens` AND
+  `ApiManagementGatewayLlmLog.CompletionTokens`** — streaming and
+  non-streaming alike. APIM's classic-tier LLM diagnostic does not parse
+  `usage.output_tokens` from Anthropic Messages API responses. The Anthropic
+  policy XML
+  (`apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml`)
+  compensates with an `<outbound>` `<emit-metric>` block that reads
+  `usage.output_tokens` from the response body and emits an
+  `Anthropic Completion Tokens` custom metric (namespace = the configured
+  `apimProductName`).
+- **Anthropic streaming completion tokens remain unmeasurable**. The
+  `<outbound>` `<emit-metric>` block is gated on a `requestIsStream` flag
+  captured in `<inbound>`; SSE-streamed responses cannot be parsed as a single
+  JSON object via `context.Response.Body.As<JObject>()`. Streaming Anthropic
+  rows in the workbook show `Completion = 0`. No workaround on classic-tier
+  APIM.
+- **Anthropic streaming `ModelName` is always empty in `LlmLog`**. Use
+  `DeploymentName` from the same row or `Properties.Model` from `AppMetrics`
+  (the `<llm-emit-token-metric>` policy on the Anthropic API extracts the
+  model from the request body and emits it as a dimension).
+- **Anthropic prompts are mostly missing from `ApiManagementGatewayLlmLog`**:
+  when `system` is a list of content blocks (Claude Code, OpenCode) the row has
+  a response but an empty `RequestMessages`. Replies are fine. Use the request
+  body log (above) when prompts are needed.
+- Custom policy metrics (`<llm-emit-token-metric>` dimensions and the explicit
+  `Anthropic Completion Tokens` emit) all land in `AppMetrics` under the
+  namespace given by `apimProductName` (substituted into the policy XML at
+  deploy time via the `__METRIC_NAMESPACE__` sentinel).
 - These are Developer SKU (classic tier) limitations; v2 tiers may differ.
 
 ## Foundry diagnostics
 
-Each `Microsoft.CognitiveServices/accounts` (AI Foundry) account sends `Audit`, `AzureOpenAIRequestUsage`, and `AllMetrics` to the in-stack Log Analytics workspace (`law-${unique}`) by default. This provides Foundry-side observability that is independent of APIM — useful for traffic that bypasses the gateway (e.g., Entra-ID-authenticated direct callers, internal Foundry portal usage) and for management-plane audit. The verbose `RequestResponse` (full request/response bodies) and `Trace` (internal traces) categories are off by default; flip them on per-deployment via the bicep params `aifDiagnosticsEnableRequestResponse=true` and `aifDiagnosticsEnableTrace=true` when troubleshooting.
+Each `Microsoft.CognitiveServices/accounts` (AI Foundry) account sends
+`Audit`, `AzureOpenAIRequestUsage`, and `AllMetrics` to the in-stack Log
+Analytics workspace (`law-${unique}`) by default. This provides Foundry-side
+observability that is independent of APIM — useful for traffic that bypasses
+the gateway (e.g., Entra-ID-authenticated direct callers, internal Foundry
+portal usage) and for management-plane audit. The verbose `RequestResponse`
+(full request/response bodies) and `Trace` (internal traces) categories are
+off by default; flip them on per-deployment via the bicep params
+`aifDiagnosticsEnableRequestResponse=true` and
+`aifDiagnosticsEnableTrace=true` when troubleshooting.
 
-Foundry logs land in the `AzureDiagnostics` table — distinct from the APIM-managed `ApiManagementGatewayLogs` / `ApiManagementGatewayLlmLog` / `AppMetrics` tables — and can be queried with:
+Foundry logs land in the `AzureDiagnostics` table — distinct from the
+APIM-managed `ApiManagementGatewayLogs` / `ApiManagementGatewayLlmLog` /
+`AppMetrics` tables — and can be queried with:
 
 ```kusto
 AzureDiagnostics
@@ -155,7 +890,10 @@ AzureDiagnostics
 
 ## OpenCode configuration
 
-`examples/opencode.json` is a ready-to-use OpenCode config. The two providers (`aifapim-openapi`, `aifapim-anthropic`) read `AIFAPIM_HOST` and `AIFAPIM_API_KEY` from the environment. The `apiKey` field in the config is intentionally set to `"dummy"` — authentication is via the `x-api-key` header.
+`examples/opencode.json` is a ready-to-use OpenCode config. The two providers
+(`aifapim-openapi`, `aifapim-anthropic`) read `AIFAPIM_HOST` and
+`AIFAPIM_API_KEY` from the environment. The `apiKey` field in the config is
+intentionally set to `"dummy"` — authentication is via the `x-api-key` header.
 
 ```bash
 export AIFAPIM_HOST=<gateway-hostname>
@@ -164,45 +902,123 @@ cp examples/opencode.json opencode.json
 opencode
 ```
 
-Note: the `aifapim-openapi` provider's `baseURL` points at `https://{AIFAPIM_HOST}/openai/v1`, which only exposes the OpenAI **Responses API** (`POST /v1/responses`) — Chat Completions is not proxied at that path. Verified empirically against opencode 1.14.41 + bundled `@ai-sdk/openai`: requests route to `POST /openai/v1/responses` (HTTP 200), not `/v1/chat/completions` (which would 404), for both AI-SDK-known model ids (e.g. `gpt-4.1-mini`) and custom deployment names (e.g. `my-custom-deployment-name`). If a future opencode/AI-SDK upgrade ever falls back to `/v1/chat/completions`, switch the `aifapim-openapi` provider to `"npm": "@ai-sdk/openai-compatible"` or pin a known-good `@ai-sdk/openai` version.
+Note: the `aifapim-openapi` provider's `baseURL` points at
+`https://{AIFAPIM_HOST}/openai/v1`, which only exposes the OpenAI **Responses
+API** (`POST /v1/responses`) — Chat Completions is not proxied at that path.
+Verified empirically against opencode 1.14.41 + bundled `@ai-sdk/openai`:
+requests route to `POST /openai/v1/responses` (HTTP 200), not
+`/v1/chat/completions` (which would 404), for both AI-SDK-known model ids
+(e.g. `gpt-4.1-mini`) and custom deployment names
+(e.g. `my-custom-deployment-name`). If a future opencode/AI-SDK upgrade ever
+falls back to `/v1/chat/completions`, switch the `aifapim-openapi` provider to
+`"npm": "@ai-sdk/openai-compatible"` or pin a known-good `@ai-sdk/openai`
+version.
 
 ## Resource naming
 
-All shared resources use a deterministic suffix: `uniqueString(resourceGroup().id, subscription().id)`. The APIM service name is `apim-<unique>`. Any out-of-tree subscription provisioning must target the same resource group so it can resolve the APIM service by this naming pattern.
+All shared resources use a deterministic suffix:
+`uniqueString(resourceGroup().id, subscription().id)`. The APIM service name
+is `apim-<unique>`. Any out-of-tree subscription provisioning must target the
+same resource group so it can resolve the APIM service by this naming pattern.
 
 ## Verification via examples/test-apim.py
 
-There is no automated test suite or CI. Post-deploy verification is driven by a single smoke-test script: `examples/test-apim.py`.
+There is no automated test suite, and CI does not deploy or call the gateway
+(it only lints and runs PSRule). Post-deploy verification is driven by a
+single smoke-test script: `examples/test-apim.py`.
 
-`examples/test-apim.py` exercises every public API surface using a subscription key from `AIFAPIM_API_KEY`:
+`examples/test-apim.py` exercises every public API surface using a
+subscription key from `AIFAPIM_API_KEY`:
 
-- root API: `client.chat.completions.create` against `{endpoint}/deployments/{deployment}` (classic AOAI)
-- v1 Messages API: `client.responses.create` against `{endpoint}/openai/v1/`
+- root API: `client.chat.completions.create` against
+  `{endpoint}/deployments/{deployment}` (classic AOAI)
+- v1 Messages API: `client.responses.create` against
+  `{endpoint}/openai/v1/`
 - Anthropic API: `client.messages.create` against `{endpoint}/anthropic`
 
-Reads `AIFAPIM_HOST` and `AIFAPIM_API_KEY` from the environment; raises `KeyError` if either is unset. Set them to your dev or prod gateway hostname and a valid subscription key before running. No assertions — visual inspection of output is the success criterion.
+Reads `AIFAPIM_HOST` and `AIFAPIM_API_KEY` from the environment; raises
+`KeyError` if either is unset. Set them to your dev or prod gateway hostname
+and a valid subscription key before running. No assertions — visual inspection
+of output is the success criterion.
+
+### Running it
+
+The preferred invocation uses the bundled pixi environment
+(`examples/pixi.toml`), which pins `openai`, `anthropic`, and `rich` from
+conda-forge and exposes a single `example` task:
+
+```bash
+export AIFAPIM_HOST=<gateway-hostname>
+export AIFAPIM_API_KEY=<subscription-key>
+cd examples && pixi run example
+# or, from the repo root:
+#   pixi run --manifest-path examples/pixi.toml example
+```
+
+Or with any Python that has `openai` and `anthropic` installed:
+
+```bash
+export AIFAPIM_HOST=<gateway-hostname>
+export AIFAPIM_API_KEY=<subscription-key>
+python examples/test-apim.py
+```
 
 ### Standard post-deploy verification workflow
 
-1. Confirm `az deployment group create … --parameters aifapim-<env>.bicepparam` returned `Succeeded`.
-2. Pick deployment names that actually exist in your environment's parameter file — the model list changes over time:
+1. Confirm `az deployment group create … --parameters aifapim-<env>.bicepparam`
+   returned `Succeeded`.
+2. Pick deployment names that actually exist in your environment's parameter
+   file — the model list changes over time:
+
    ```bash
    grep -E "^\s+name:" aifapim-<env>.bicepparam
    ```
-3. Update the `__main__` block in `examples/test-apim.py` if the hard-coded model names are stale, then:
+
+3. Update the `__main__` block in `examples/test-apim.py` if the hard-coded
+   model names are stale, then:
+
    ```bash
    export AIFAPIM_HOST=<your-dev-gateway>
    export AIFAPIM_API_KEY=<dev-subscription-key>
-   python examples/test-apim.py
+   cd examples && pixi run example
+   # alternative without pixi:
+   #   python examples/test-apim.py
    ```
-   Every `run_chat`, `run_chat_v1`, and `run_anthropic` call should print a coherent answer.
-4. Smoke-test the `/models` listing routes added to all three APIs:
+
+   Every `run_chat`, `run_chat_v1`, `run_anthropic`, and `run_embedding_v1`
+   call should print a coherent answer (or, for embeddings, a vector dimension
+   and prompt-token count). The `run_image` and `run_image_v1` calls write the
+   generated and edited images to a temporary directory and print each path
+   and size.
+4. Smoke-test the `/models` listing routes added to the inference APIs and
+   the new `/catalog` endpoint:
+
    ```bash
-   curl -sS "https://$AIFAPIM_HOST/openai/v1/models"            -H "x-api-key: $AIFAPIM_API_KEY" | jq '.data[].id'
-   curl -sS "https://$AIFAPIM_HOST/models?api-version=2024-10-21" -H "x-api-key: $AIFAPIM_API_KEY" | jq '.data[].id'
+   curl -sS "https://$AIFAPIM_HOST/openai/v1/models" \
+     -H "x-api-key: $AIFAPIM_API_KEY" | jq '.data[].id'
+   curl -sS "https://$AIFAPIM_HOST/models?api-version=2024-10-21" \
+     -H "x-api-key: $AIFAPIM_API_KEY" | jq '.data[].id'
+
+   # Catalog endpoint — use a key scoped to the aifapim-catalog product.
+   # Issue the key first: see aifapim-config/catalog-key.sh.
+   export CATALOG_KEY=<catalog-product-key>
+   curl -sS "https://$AIFAPIM_HOST/catalog" \
+     -H "x-api-key: $CATALOG_KEY" | jq '.[].id'
+
+   # Verify the catalog key cannot call inference (must return 401):
+   curl -sS "https://$AIFAPIM_HOST/openai/v1/models" \
+     -H "x-api-key: $CATALOG_KEY"
    ```
-   Both must return 200 with a non-empty `data` array. Foundry intentionally does not proxy `/anthropic/v1/models` (returns 404 `api_not_supported`) — do not test that route.
-5. Tail `ApiManagementGatewayLogs` in Log Analytics (workspace `law-<unique>`) for the last 15 minutes and confirm no unexpected 4xx/5xx:
+
+   The inference listing routes must return 200 with a non-empty `data` array.
+   `/catalog` must return 200 with a non-empty JSON array of model objects.
+   The catalog key against any inference route must return 401 (not 403 —
+   the key is valid but not in the inference product's subscription list).
+   Foundry intentionally does not proxy `/anthropic/v1/models` (returns 404
+   `api_not_supported`) — do not test that route.
+5. Tail `ApiManagementGatewayLogs` in Log Analytics (workspace `law-<unique>`)
+   for the last 15 minutes and confirm no unexpected 4xx/5xx:
+
    ```kusto
    ApiManagementGatewayLogs
    | where TimeGenerated > ago(15m)
@@ -211,4 +1027,6 @@ Reads `AIFAPIM_HOST` and `AIFAPIM_API_KEY` from the environment; raises `KeyErro
    | order by TimeGenerated desc
    ```
 
-Failure of any of the above is a no-go for promotion to prod. Re-running `examples/test-apim.py` with `AIFAPIM_HOST=<your-prod-gateway>` and a prod subscription key constitutes the prod smoke test.
+Failure of any of the above is a no-go for promotion to prod. Re-running
+`examples/test-apim.py` with `AIFAPIM_HOST=<your-prod-gateway>` and a prod
+subscription key constitutes the prod smoke test.

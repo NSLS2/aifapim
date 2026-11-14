@@ -9,6 +9,8 @@ param alertEmailName string
 @description('Email address for the alert action group.')
 param alertEmailAddress string
 
+param tags object = {}
+
 resource workspace 'Microsoft.OperationalInsights/workspaces@2020-10-01' existing =  {
   name: workspaceName
 }
@@ -17,15 +19,18 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02-preview' 
   name: applicationInsightsName
   location: location
   kind: 'web'
+  tags: tags
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: workspace.id
+    DisableLocalAuth: true
   }
 }
 
 resource emailActionGroup 'microsoft.insights/actionGroups@2019-06-01' = {
   name: 'eag-${uniqueSuffix}'
   location: 'global'
+  tags: tags
   properties: {
     groupShortName: 'string'
     enabled: true
@@ -40,4 +45,5 @@ resource emailActionGroup 'microsoft.insights/actionGroups@2019-06-01' = {
 }
 
 output aiId string = applicationInsights.id
+output connectionString string = applicationInsights.properties.ConnectionString
 output actionGroupId string = emailActionGroup.id
