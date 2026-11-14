@@ -98,9 +98,9 @@
                             if (r == null || r.StatusCode != 200) { return &quot;complex&quot;; }
                             try {
                                 var j = r.Body.As&lt;JObject&gt;(preserveContent: true);
-                                var t = ((string)j[&quot;content&quot;][0][&quot;text&quot;] ?? &quot;&quot;).Trim().ToLowerInvariant();
-                                if (t.StartsWith(&quot;simple&quot;)) { return &quot;simple&quot;; }
-                                if (t.StartsWith(&quot;medium&quot;)) { return &quot;medium&quot;; }
+                                var t = ((string)j[&quot;content&quot;][0][&quot;text&quot;] ?? &quot;&quot;).Trim().TrimEnd('.').ToLowerInvariant();
+                                if (t == &quot;simple&quot;) { return &quot;simple&quot;; }
+                                if (t == &quot;medium&quot;) { return &quot;medium&quot;; }
                                 return &quot;complex&quot;;
                             } catch {
                                 return &quot;complex&quot;;
