@@ -8,10 +8,12 @@ servers:
     variables:
       endpoint:
         default: your-resource-name.openai.azure.com
+# Local change (not in upstream): the security schemes are the gateway's, not
+# Azure's (the x-api-key header, or an Entra token through the open product).
+# Re-apply after refreshing this file from upstream; see AGENTS.md.
 security:
-  - bearer:
-      - api.read
-  - apiKey: []
+  - apiKeyHeader: []
+  - entraToken: []
 paths:
   /deployments/{deployment-id}/completions:
     post:
@@ -2732,15 +2734,13 @@ components:
         prompt_filter_results:
           $ref: "#/components/schemas/dalleFilterResults"
   securitySchemes:
-    bearer:
-      type: oauth2
-      flows:
-        implicit:
-          authorizationUrl: https://login.microsoftonline.com/common/oauth2/v2.0/authorize
-          scopes: {}
-      x-tokenInfoFunc: api.middleware.auth.bearer_auth
-      x-scopeValidateFunc: api.middleware.auth.validate_scopes
-    apiKey:
+    apiKeyHeader:
       type: apiKey
-      name: api-key
+      name: x-api-key
       in: header
+      description: Subscription key issued by the gateway.
+    entraToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Microsoft Entra ID access token for the gateway API. Without a subscription key it is the only credential (the open product); a service product with Entra authentication requires it together with the key.

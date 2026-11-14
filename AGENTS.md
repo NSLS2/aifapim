@@ -760,9 +760,14 @@ curl -sS -o api_definitions/AzureOpenAI_inference_2024-10-21.yaml \
   https://raw.githubusercontent.com/Azure/azure-rest-api-specs/refs/heads/main/specification/cognitiveservices/data-plane/AzureOpenAI/inference/stable/2024-10-21/inference.yaml
 ```
 
-Then re-apply the local `/models` and `/models/{model_id}` path additions
-(they are not in upstream) and redeploy. Diff against the previous version
-before committing to confirm no unexpected upstream operation changes.
+Then re-apply the local changes (none of them is in upstream) and redeploy:
+the `/models`, `/models/{model_id}` and `images/edits` path additions, and
+the security schemes. Upstream declares Azure's `api-key` header and an OAuth
+flow; every spec in `api_definitions/` must declare the gateway's instead,
+`apiKeyHeader` (the `x-api-key` header) and `entraToken` (HTTP bearer), at the
+top level. `tests/policy/caller-policy-test.ps1` fails when a spec declares any
+other scheme. Diff against the previous version before committing to confirm
+no unexpected upstream operation changes.
 
 ## Developer SKU ServiceLocked race
 

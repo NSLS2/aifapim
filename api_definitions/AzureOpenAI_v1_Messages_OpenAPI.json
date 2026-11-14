@@ -15,11 +15,6 @@
       "post": {
         "operationId": "createResponse",
         "summary": "Create a response (messages API)",
-        "security": [
-          {
-            "apiKeyAuth": []
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -49,11 +44,6 @@
         "operationId": "createEmbedding",
         "summary": "Create embeddings",
         "description": "Get a vector representation of a given input that can be consumed by machine learning models and algorithms.",
-        "security": [
-          {
-            "apiKeyAuth": []
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -83,11 +73,6 @@
         "operationId": "createImage",
         "summary": "Create an image",
         "description": "Generates one or more images from a text prompt. Set model to the deployment name of an image model served on this route, for example gpt-image-2.5-flare, FLUX-1.1-pro or FLUX.1-Kontext-pro. FLUX.2-pro is not served here: use the Black Forest Labs provider route.",
-        "security": [
-          {
-            "apiKeyAuth": []
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -117,11 +102,6 @@
         "operationId": "createImageEdit",
         "summary": "Edit an image",
         "description": "Edits or extends an image from a text prompt and one or more input images. Set model to the deployment name of an image model that edits on this route, for example gpt-image-2.5-sunburst. No FLUX model edits here: FLUX.1-Kontext-pro edits on /deployments/{name}/images/edits with api-version=2025-04-01-preview, and FLUX.2-pro on the Black Forest Labs provider route.",
-        "security": [
-          {
-            "apiKeyAuth": []
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -151,11 +131,6 @@
         "operationId": "listModels",
         "summary": "List available models",
         "description": "Lists the currently available model deployments and provides basic information about each one.",
-        "security": [
-          {
-            "apiKeyAuth": []
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -175,11 +150,6 @@
         "operationId": "retrieveModel",
         "summary": "Retrieve a model",
         "description": "Retrieves a model deployment, providing basic information.",
-        "security": [
-          {
-            "apiKeyAuth": []
-          }
-        ],
         "parameters": [
           {
             "name": "model",
@@ -208,10 +178,17 @@
   },
   "components": {
     "securitySchemes": {
-      "apiKeyAuth": {
+      "apiKeyHeader": {
         "type": "apiKey",
+        "name": "x-api-key",
         "in": "header",
-        "name": "api-key"
+        "description": "Subscription key issued by the gateway."
+      },
+      "entraToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Microsoft Entra ID access token for the gateway API. Without a subscription key it is the only credential (the open product); a service product with Entra authentication requires it together with the key."
       }
     },
     "schemas": {
@@ -533,5 +510,13 @@
         }
       }
     }
-  }
+  },
+  "security": [
+    {
+      "apiKeyHeader": []
+    },
+    {
+      "entraToken": []
+    }
+  ]
 }

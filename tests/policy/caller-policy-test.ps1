@@ -4,7 +4,8 @@
 # as service principals, which object id, name and client the caller gets, and how a keyed or a
 # keyless request is named. It also checks the policy files statically: that no inference policy
 # reads context.Subscription outside the two usageId / usageName variables, and that no policy
-# uses a Regex member APIM does not allow.
+# uses a Regex member APIM does not allow, and that every API spec in api_definitions declares the
+# gateway's credentials (the x-api-key header or an Entra bearer token) and nothing else.
 # It needs PowerShell 7 (pwsh), which has the C# compiler and Newtonsoft.Json. It does not run
 # APIM, so APIM's own limits on allowed types, and validate-azure-ad-token itself, are not
 # checked here: the tokens are not signed and are never validated.
@@ -53,6 +54,34 @@ foreach ($name in $inference) {
     $base = $text.IndexOf('<base />')
     Check (($base -ge 0) -and ($first -gt $base)) ('{0}: usageId is set after the first <base /> (the product policy has run)' -f $name)
 }
+# Every API spec declares the gateway's credentials, not Azure's: the x-api-key header or an Entra
+# token (bearer), at the top level, with no operation overriding them. A client generated from a
+# spec otherwise sends the key under a name the gateway does not read.
+$specDir = Join-Path $PolicyDir '../api_definitions'
+foreach ($file in Get-ChildItem -Path $specDir -Filter '*.json') {
+    $spec = Get-Content -Raw $file.FullName | ConvertFrom-Json -AsHashtable
+    $schemes = $spec.components.securitySchemes
+    $key = $schemes.apiKeyHeader
+    $tok = $schemes.entraToken
+    Check (($schemes.Keys.Count -eq 2) -and $key -and $tok) ('{0}: declares exactly apiKeyHeader and entraToken' -f $file.Name)
+    Check ($key -and $key.type -eq 'apiKey' -and $key.in -eq 'header' -and $key.name -eq 'x-api-key') ('{0}: apiKeyHeader is the x-api-key header' -f $file.Name)
+    Check ($tok -and $tok.type -eq 'http' -and $tok.scheme -eq 'bearer') ('{0}: entraToken is an HTTP bearer token' -f $file.Name)
+    $top = @($spec.security | ForEach-Object { $_.Keys }) -join ','
+    Check ($top -eq 'apiKeyHeader,entraToken') ('{0}: top-level security is apiKeyHeader or entraToken' -f $file.Name)
+    $overrides = @($spec.paths.Values | ForEach-Object { $_.Values } | Where-Object { $_ -is [hashtable] -and $_.ContainsKey('security') }).Count
+    Check ($overrides -eq 0) ('{0}: no operation overrides security' -f $file.Name)
+}
+foreach ($file in Get-ChildItem -Path $specDir -Filter '*.yaml') {
+    # No YAML parser in PowerShell 7: check the text. Only the top-level security block may exist.
+    $text = (Get-Content -Raw $file.FullName) -replace "`r`n", "`n"
+    Check ($text -match "(?m)^security:\n  - apiKeyHeader: \[\]\n  - entraToken: \[\]\n(?!  )") ('{0}: top-level security is apiKeyHeader or entraToken' -f $file.Name)
+    Check ([regex]::Matches($text, '(?m)^\s+security:').Count -eq 0) ('{0}: no operation overrides security' -f $file.Name)
+    $block = [regex]::Match($text, "(?ms)^  securitySchemes:\n(.*?)(?=^  \S|\z)").Groups[1].Value
+    $names = @([regex]::Matches($block, '(?m)^    (\w+):') | ForEach-Object { $_.Groups[1].Value }) -join ','
+    Check ($names -eq 'apiKeyHeader,entraToken') ('{0}: declares exactly apiKeyHeader and entraToken' -f $file.Name)
+    Check ($block -match "(?m)^      name: x-api-key$" -and $block -match "(?m)^      in: header$" -and $block -match "(?m)^      scheme: bearer$") ('{0}: apiKeyHeader is the x-api-key header, entraToken a bearer token' -f $file.Name)
+}
+
 [xml]$open = Get-Content -Raw (Join-Path $PolicyDir 'Product_EntraOpen_Policy.xml')
 $validators = $open.SelectNodes('//validate-azure-ad-token')
 Check ($validators.Count -eq 2) 'open product policy has two validate-azure-ad-token branches'

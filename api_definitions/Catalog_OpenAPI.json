@@ -59,12 +59,7 @@
           "403": {
             "description": "Client IP not in allow-list"
           }
-        },
-        "security": [
-          {
-            "apiKeyHeader": []
-          }
-        ]
+        }
       }
     },
     "/images": {
@@ -293,8 +288,23 @@
       "apiKeyHeader": {
         "type": "apiKey",
         "name": "x-api-key",
-        "in": "header"
+        "in": "header",
+        "description": "Subscription key issued by the gateway."
+      },
+      "entraToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Microsoft Entra ID access token for the gateway API. Without a subscription key it is the only credential (the open product); a service product with Entra authentication requires it together with the key."
       }
     }
-  }
+  },
+  "security": [
+    {
+      "apiKeyHeader": []
+    },
+    {
+      "entraToken": []
+    }
+  ]
 }
