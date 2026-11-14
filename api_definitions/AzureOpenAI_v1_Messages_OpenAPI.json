@@ -82,7 +82,7 @@
       "post": {
         "operationId": "createImage",
         "summary": "Create an image",
-        "description": "Generates one or more images from a text prompt. Set model to the deployment name of an image model, for example FLUX.2-pro.",
+        "description": "Generates one or more images from a text prompt. Set model to the deployment name of an image model served on this route, for example gpt-image-2.5-flare, FLUX-1.1-pro or FLUX.1-Kontext-pro. FLUX.2-pro is not served here: use the Black Forest Labs provider route.",
         "security": [
           {
             "apiKeyAuth": []
@@ -116,7 +116,7 @@
       "post": {
         "operationId": "createImageEdit",
         "summary": "Edit an image",
-        "description": "Edits or extends an image from a text prompt and one or more input images. Set model to the deployment name of an image model that supports edits, for example FLUX.2-pro or FLUX.1-Kontext-pro.",
+        "description": "Edits or extends an image from a text prompt and one or more input images. Set model to the deployment name of an image model that edits on this route, for example gpt-image-2.5-sunburst. No FLUX model edits here: FLUX.1-Kontext-pro edits on /deployments/{name}/images/edits with api-version=2025-04-01-preview, and FLUX.2-pro on the Black Forest Labs provider route.",
         "security": [
           {
             "apiKeyAuth": []
@@ -402,7 +402,7 @@
         "properties": {
           "model": {
             "type": "string",
-            "description": "The deployment name of the image model, for example FLUX.2-pro."
+            "description": "The deployment name of the image model, for example gpt-image-2.5-flare or FLUX-1.1-pro."
           },
           "prompt": {
             "type": "string",
@@ -436,7 +436,7 @@
         "properties": {
           "model": {
             "type": "string",
-            "description": "The deployment name of the image model, for example FLUX.2-pro."
+            "description": "The deployment name of the image model, for example gpt-image-2.5-sunburst."
           },
           "prompt": {
             "type": "string",

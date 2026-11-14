@@ -374,9 +374,12 @@ paths:
         Create an image.:
           $ref: ./examples/image_generation.yaml
   # Local addition (not in upstream): image edits. The upstream 2024-10-21
-  # data-plane spec only has image generations. Foundry image models that
-  # edit images (FLUX.2-pro, FLUX.1-Kontext-pro) accept the OpenAI-style
-  # multipart request on this path.
+  # data-plane spec only has image generations. FLUX.1-Kontext-pro accepts
+  # the OpenAI-style multipart request on this path, with
+  # api-version=2025-04-01-preview only (and no `n`). FLUX.2-pro does not:
+  # it edits with JSON on the provider route
+  # (/providers/blackforestlabs/v1/flux-2-pro). See README "Example: Create
+  # or edit an image (FLUX)".
   /deployments/{deployment-id}/images/edits:
     post:
       summary: Edits or extends an image from a text prompt and one or more input images on a given image model deployment.
@@ -393,15 +396,15 @@ paths:
           required: true
           schema:
             type: string
-            example: FLUX.2-pro
+            example: FLUX.1-Kontext-pro
             description: Deployment id of the image model which was deployed.
         - in: query
           name: api-version
           required: true
           schema:
             type: string
-            example: preview
-            description: api version
+            example: 2025-04-01-preview
+            description: api version (2025-04-01-preview for FLUX.1-Kontext-pro)
       responses:
         '200':
           description: Ok
