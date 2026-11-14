@@ -109,10 +109,18 @@ function Body($xml, $name) {
 }
 [xml]$anthropic = Get-Content -Raw (Join-Path $PolicyDir $inference[2])
 [xml]$trace = '<r>' + ((Get-Content -Raw (Join-Path $PolicyDir 'UsageTrace_Fragment.xml')) -replace '<!--[\s\S]*?-->', '') + '</r>'
+[xml]$reqlog = '<r>' + ((Get-Content -Raw (Join-Path $PolicyDir 'RequestBodyLog_Fragment.xml')) -replace '<!--[\s\S]*?-->', '') + '</r>'
+function HeaderBody($xml, $name) {
+    $v = ($xml.SelectNodes('//set-header') | Where-Object { $_.name -eq $name } | Select-Object -First 1).value.Trim()
+    if ($v.StartsWith('@{') -and $v.EndsWith('}')) { return $v.Substring(2, $v.Length - 3) }
+    if ($v.StartsWith('@(') -and $v.EndsWith(')')) { return 'return ' + $v.Substring(2, $v.Length - 3) + ';' }
+    throw "header $name is not an expression"
+}
 $code = @"
 using System; using System.Collections.Generic; using System.Linq; using Newtonsoft.Json.Linq;
 public class Hdrs { public Dictionary<string,string> d = new Dictionary<string,string>(); public string GetValueOrDefault(string k, string def){ return d.ContainsKey(k)? d[k]:def; } }
-public class Req { public Hdrs Headers = new Hdrs(); }
+public class Bdy { public string text = ""; public T As<T>(bool preserveContent = false) { if (typeof(T)==typeof(JObject)) return (T)(object)JObject.Parse(text); throw new Exception("type"); } }
+public class Req { public Hdrs Headers = new Hdrs(); public Bdy Body = new Bdy(); }
 public class Vars {
   public Dictionary<string,object> d = new Dictionary<string,object>();
   public T GetValueOrDefault<T>(string k, T def) { return d.ContainsKey(k) && d[k] is T ? (T)d[k] : def; }
@@ -146,6 +154,7 @@ public static class Pol {
   public static object UsageId(Ctx context) { $(Body $anthropic 'usageId') }
   public static object UsageName(Ctx context) { $(Body $anthropic 'usageName') }
   public static object UsageModel(Ctx context) { $(Body $trace 'usageModel') }
+  public static object StreamMeta(Ctx context) { $(HeaderBody $reqlog 'x-ms-meta-stream') }
 $(($metaNames | ForEach-Object { '  public static object Meta' + $_ + '(Ctx context) { ' + (MetaBody $trace $_) + ' }' }) -join "`n")
 }
 "@
@@ -225,6 +234,20 @@ $c = New-Object Ctx; $c.Variables.d['deploymentName'] = 'gpt-5'
 Check ([Pol]::UsageModel($c) -eq 'gpt-5') 'the deployment name is the fallback model'
 $c = New-Object Ctx
 Check ([Pol]::UsageModel($c) -eq '-') 'no model gives a dash, never an empty value'
+
+# Request body log: the stream flag comes from requestIsStream (Anthropic) or the JSON body (the others).
+function StreamCase($var, $ctype, $body) {
+    $c = New-Object Ctx
+    if ($null -ne $var) { $c.Variables.d['requestIsStream'] = $var }
+    $c.Request.Headers.d['Content-Type'] = $ctype
+    $c.Request.Body.text = $body
+    return [Pol]::StreamMeta($c)
+}
+Check ((StreamCase 'true' 'application/json' '{}') -eq 'true') 'request log stream: requestIsStream is used when set'
+Check ((StreamCase $null 'application/json' '{"stream":true}') -eq 'true') 'request log stream: JSON body with stream true'
+Check ((StreamCase $null 'application/json; charset=utf-8' '{"model":"m"}') -eq 'false') 'request log stream: JSON body without stream'
+Check ((StreamCase $null 'multipart/form-data; boundary=x' '--x--') -eq '-') 'request log stream: not JSON gives a dash'
+Check ((StreamCase $null 'application/json' 'not json') -eq '-') 'request log stream: unreadable JSON gives a dash'
 
 # Every trace metadata value must be non-empty: APIM answers 500 (ExpressionValueValidationFailure,
 # "The value field is required") when one is empty, and that happened to every keyed request on dev.
