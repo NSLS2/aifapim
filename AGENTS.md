@@ -332,14 +332,22 @@ Fetch the keys with
       trace is the only per-caller record. `ApiManagementGatewayLlmLog` has
       several rows per request, with only one holding the tokens: count
       requests with `dcount(RequestId)`.
+    - **A trace metadata value must never be empty.** APIM answers 500
+      (`ExpressionValueValidationFailure`, "The value field is required",
+      `LastErrorSource` `trace`) when one is. A keyed request has no client, so
+      the first dev run with `usageTrace` on returned 500 for every keyed
+      inference call until each value fell back to a dash. The keyless test
+      alone did not show it: run a keyed inference call too. A keyed call is
+      recorded with `CallerType` `key`, the subscription's id and display name,
+      and its own product; because subscriptions are named by the Entra object
+      id, a person's key and token give the same `CallerId`.
     - **Side effect:** creating the open product also created an active key for
       APIM's built-in Administrator (owner `/users/1`). It does not skip the
       token check (a valid key puts the request in its own product, so this
       product's policy still runs), but delete it, as for any new product.
     - **Not verified yet:** the service-principal branch (an app-only
-      certificate token with `Inference.Invoke`); a keyed request after the
-      change (keyed traffic has not been re-tested since the policies changed);
-      that APIM refuses a second open product.
+      certificate token with `Inference.Invoke`); that APIM refuses a second
+      open product.
     - Check expressions with `pwsh -NoProfile -File
       tests/policy/caller-policy-test.ps1` (fake context, unsigned tokens; it
       does not run `validate-azure-ad-token`).
