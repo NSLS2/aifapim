@@ -9,9 +9,11 @@
 # Exit status 1 when a case fails.
 param(
     [string]$Policy = (Join-Path $PSScriptRoot '../../apim_policies/MAI_Image_Policy-Managed_Identity_with_Retry.xml'),
-    [string]$CasesFile = (Join-Path $PSScriptRoot 'mai-cases.json')
+    [string]$CasesFile = (Join-Path $PSScriptRoot 'mai-cases.json'),
+    [string]$V1Policy = (Join-Path $PSScriptRoot '../../apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml')
 )
 $WarningPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 
 # APIM allows only some members of some types in a policy expression, and the C# compiler here
 # knows nothing about that list. The documented members of Regex are the ones below; one that is
@@ -30,11 +32,15 @@ foreach ($file in Get-ChildItem -Path $policyDir -Filter '*.xml') {
     }
 }
 [xml]$x = Get-Content -Raw $Policy
-function Expr($name) {
-    $v = ($x.SelectNodes("//set-variable") | Where-Object { $_.name -eq $name }).value.Trim()
+[xml]$x1 = Get-Content -Raw $V1Policy
+function Expr($name, $doc = $x) {
+    $v = ($doc.SelectNodes("//set-variable") | Where-Object { $_.name -eq $name }).value.Trim()
     if (-not ($v.StartsWith('@{') -and $v.EndsWith('}'))) { throw "$name is not a block expression" }
     return $v.Substring(2, $v.Length - 3)
 }
+# The OpenAI v1 policy reads image edit forms with the same reader; it must not drift.
+$sameReader = (Expr 'formFields') -eq (Expr 'formFields' $x1)
+'{0,-6} {1}' -f $(if ($sameReader) { 'OK' } else { 'WRONG' }), 'OpenAI v1 policy formFields is identical to the MAI one'
 $code = @"
 using System; using System.Collections.Generic; using Newtonsoft.Json.Linq;
 public class Hdrs { public Dictionary<string,string> d = new Dictionary<string,string>(); public string GetValueOrDefault(string k, string def){ return d.ContainsKey(k)? d[k]:def; } }
@@ -46,6 +52,7 @@ public static class Pol {
   public static object FormFields(Ctx context) { $(Expr 'formFields') }
   public static object Model(Ctx context) { $(Expr 'requestModel') }
   public static object Grounding(Ctx context) { $(Expr 'webGrounding') }
+  public static object V1Model(Ctx context) { $(Expr 'requestModel' $x1) }
 }
 "@
 $refs = @((Join-Path $PSHOME 'Newtonsoft.Json.dll'), 'System.Collections', 'System.Runtime', 'System.Text.RegularExpressions', 'System.Linq', 'System.Private.CoreLib', 'netstandard')
@@ -61,8 +68,14 @@ foreach ($c in $cases) {
     $blocked = [Pol]::Grounding($ctx)
     $model = [Pol]::Model($ctx)
     $ok = ($blocked -eq $c.blocked) -and ($model -eq $c.model)
+    # The v1 policy names a multipart model the same way (it has no size limit or web_grounding).
+    if ($c.contentType -like 'multipart/*') {
+        $v1Model = [Pol]::V1Model($ctx)
+        $ok = $ok -and ($v1Model -eq $c.model)
+    } else { $v1Model = '-' }
     if (-not $ok) { $bad++ }
-    '{0,-6} {1,-50} blocked={2,-5} model={3}' -f $(if ($ok) { 'OK' } else { 'WRONG' }), $c.name, $blocked, $model
+    '{0,-6} {1,-50} blocked={2,-5} model={3} v1={4}' -f $(if ($ok) { 'OK' } else { 'WRONG' }), $c.name, $blocked, $model, $v1Model
 }
+if (-not $sameReader) { $bad++ }
 "failures: $bad of $($cases.Count); disallowed Regex members: $regexBad"
 if (($bad + $regexBad) -gt 0) { exit 1 }

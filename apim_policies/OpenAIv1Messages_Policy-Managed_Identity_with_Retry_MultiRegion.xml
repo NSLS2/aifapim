@@ -19,16 +19,91 @@
              keeps the body intact for the upstream call. Used as the Model dimension
              on the token metric below. -->
         <set-variable name="isImageRequest" value="@(context.Request.Url.Path.Contains(&quot;/images/&quot;))" />
-        <!-- Image edits arrive as multipart form data, not JSON, so the model
-             field is read from the form text when the body is not JSON. Part
-             headers after Content-Disposition (such as Content-Type) are allowed. -->
-        <set-variable name="requestModel" value="@{
+        <!-- Image edits arrive as multipart form data, not JSON. The form is read
+             once into formFields with the same reader as the MAI image policy
+             (MAI_Image_Policy-Managed_Identity_with_Retry.xml; keep the two
+             identical, tests/policy/mai-policy-test.ps1 checks it): split on the
+             delimiter lines of the declared boundary, each field named only by
+             its Content-Disposition header, so text inside a prompt or a file
+             cannot pose as the model field. formFields is null for other bodies. -->
+        <set-variable name="formFields" value="@{
             try {
                 var contentType = context.Request.Headers.GetValueOrDefault(&quot;Content-Type&quot;, &quot;&quot;);
-                if (contentType.StartsWith(&quot;multipart/form-data&quot;, StringComparison.OrdinalIgnoreCase)) {
-                    var text = context.Request.Body.As&lt;string&gt;(preserveContent: true);
-                    var m = System.Text.RegularExpressions.Regex.Match(text, &quot;name=\&quot;model\&quot;[^\\r\\n]*\\r?\\n(?:[^\\r\\n]+\\r?\\n)*\\r?\\n([^\\r\\n]+)&quot;);
-                    return m.Success ? m.Groups[1].Value.Trim() : &quot;&quot;;
+                if (!contentType.StartsWith(&quot;multipart/form-data&quot;, StringComparison.OrdinalIgnoreCase)) { return null; }
+                var fields = new JObject();
+                string boundary = null;
+                var cparts = contentType.Split(';');
+                for (int i = 1; i &lt; cparts.Length; i++) {
+                    var eq = cparts[i].IndexOf('=');
+                    if (eq &gt; 0 &amp;&amp; cparts[i].Substring(0, eq).Trim().Equals(&quot;boundary&quot;, StringComparison.OrdinalIgnoreCase)) {
+                        if (boundary != null) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                        boundary = cparts[i].Substring(eq + 1).Trim().Trim('&quot;');
+                    }
+                }
+                if (string.IsNullOrEmpty(boundary)) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                var text = context.Request.Body.As&lt;string&gt;(preserveContent: true).Replace(&quot;\r\n&quot;, &quot;\n&quot;);
+                var delim = System.Text.RegularExpressions.Regex.Replace(&quot;--&quot; + boundary, &quot;[\\\\.*+?^$(){}|\\[\\]#\\s]&quot;, &quot;\\$&amp;&quot;);
+                if (!System.Text.RegularExpressions.Regex.IsMatch(text, &quot;(?m)^&quot; + delim + &quot;--[ \\t]*$&quot;)) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                var chunks = System.Text.RegularExpressions.Regex.Split(text, &quot;(?m)^&quot; + delim + &quot;(?:--)?[ \\t]*$&quot;);
+                var parameter = new System.Text.RegularExpressions.Regex(&quot;\\G\\s*;\\s*([^=;\&quot;\\s]+)\\s*=\\s*(?:\&quot;((?:[^\&quot;\\\\]|\\\\.)*)\&quot;|([^;\&quot;\\s]*))\\s*&quot;);
+                for (int i = 1; i &lt; chunks.Length - 1; i++) {
+                    var part = chunks[i];
+                    if (part.StartsWith(&quot;\n&quot;)) { part = part.Substring(1); }
+                    string headers = &quot;&quot;;
+                    string value = &quot;&quot;;
+                    if (part.StartsWith(&quot;\n&quot;)) {
+                        value = part.Substring(1);
+                    } else {
+                        var sep = part.IndexOf(&quot;\n\n&quot;, StringComparison.Ordinal);
+                        if (sep &lt; 0) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                        headers = part.Substring(0, sep);
+                        value = part.Substring(sep + 2);
+                    }
+                    var dispositions = 0;
+                    var names = 0;
+                    string name = null;
+                    foreach (var line in System.Text.RegularExpressions.Regex.Replace(headers, &quot;\n[ \\t]+&quot;, &quot; &quot;).Split('\n')) {
+                        if (!line.StartsWith(&quot;content-disposition:&quot;, StringComparison.OrdinalIgnoreCase)) { continue; }
+                        dispositions++;
+                        var disposition = line.Substring(line.IndexOf(':') + 1).Trim();
+                        var pos = disposition.IndexOf(';');
+                        if (pos &lt; 0) { pos = disposition.Length; }
+                        while (pos &lt; disposition.Length) {
+                            var pm = parameter.Match(disposition, pos);
+                            if (!pm.Success) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                            pos = pm.Index + pm.Length;
+                            var pk = pm.Groups[1].Value.ToLowerInvariant();
+                            if (pk == &quot;name*&quot;) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                            if (pk == &quot;name&quot;) {
+                                names++;
+                                name = pm.Groups[2].Success ? System.Text.RegularExpressions.Regex.Replace(pm.Groups[2].Value, &quot;\\\\(.)&quot;, &quot;$1&quot;) : pm.Groups[3].Value;
+                            }
+                        }
+                    }
+                    if (dispositions &gt; 1 || names &gt; 1) { fields[&quot;#ambiguous&quot;] = true; return fields; }
+                    if (name == null) { continue; }
+                    var key = name.Trim().ToLowerInvariant();
+                    if (!(fields[key] is JArray)) { fields[key] = new JArray(); }
+                    if (value.EndsWith(&quot;\n&quot;)) { value = value.Substring(0, value.Length - 1); }
+                    ((JArray)fields[key]).Add(value.Length &gt; 256 ? value.Substring(0, 256) : value);
+                }
+                return fields;
+            } catch {
+                var failed = new JObject();
+                failed[&quot;#ambiguous&quot;] = true;
+                return failed;
+            }
+        }" />
+        <!-- The model name: the JSON body's model field, or for a multipart form
+             its single model field, kept only when it is a plain deployment
+             name and the form was read with certainty. -->
+        <set-variable name="requestModel" value="@{
+            try {
+                var fields = context.Variables.GetValueOrDefault&lt;JObject&gt;(&quot;formFields&quot;, null);
+                if (fields != null) {
+                    var mf = fields[&quot;model&quot;] as JArray;
+                    var model = (mf != null &amp;&amp; mf.Count == 1 &amp;&amp; (fields[&quot;#ambiguous&quot;] as JValue) == null) ? ((string)mf[0]).Trim() : &quot;&quot;;
+                    return System.Text.RegularExpressions.Regex.IsMatch(model, &quot;^[A-Za-z0-9._-]{1,64}$&quot;) ? model : &quot;&quot;;
                 }
                 var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true);
                 return (string)body[&quot;model&quot;] ?? &quot;&quot;;
