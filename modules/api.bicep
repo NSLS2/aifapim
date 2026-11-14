@@ -111,7 +111,7 @@ param catalogProductDisplayName string
 @description('Description for the catalog product.')
 param catalogProductDescription string
 
-@description('Service products, each { name, displayName, description, policyXml, open }. policyXml is a product-level policy, or empty for none. An open product (open: true) needs no subscription key: its policy is then the only access check, so it is never empty.')
+@description('Service products, each { name, displayName, description, policyXml, open }. policyXml is a product-level policy, or empty for none. An open product (open: true) needs no subscription key: its policy is then the only access check, so it is never empty. Add an open product under a new name; never set open on an existing keyed product.')
 param serviceProducts array = []
 
 // Request headers copied into Application Insights (AppRequests, as
@@ -767,8 +767,13 @@ resource apimProductCatalogApi 'Microsoft.ApiManagement/service/products/apis@20
 //
 // Same APIs as the user product (the five inference APIs and the catalog API).
 // A product-level policy (the NAT-pool lock) is added when the entry has one.
-// Everything is written one at a time, in this order: products, then their API
-// links, then their policies.
+// Everything is written one at a time, in this order: products, then their
+// policies, then their API links. The policy comes before the links so an open
+// product (no key) never holds an API without its token check, and a failed
+// policy write leaves the product with no APIs rather than open ones. Do not
+// turn an existing keyed product into an open one: its APIs are already linked,
+// so it would be keyless under the old policy until the new one is written. Add
+// the open product under a new name instead.
 
 @batchSize(1)
 resource serviceProduct 'Microsoft.ApiManagement/service/products@2023-03-01-preview' = [for p in serviceProducts: {
@@ -798,13 +803,6 @@ var serviceProductApiLinks = flatten(map(range(0, length(serviceProducts)), i =>
   api: a
 })))
 
-@batchSize(1)
-resource serviceProductApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = [for link in serviceProductApiLinks: {
-  parent: serviceProduct[link.productIndex]
-  name: link.api
-  dependsOn: [serviceProduct]
-}]
-
 // A product always gets a policy. Without a restriction it only inherits, so a
 // restriction that is removed from the parameters is removed from the product too:
 // an incremental deployment never deletes a policy, and skipping the resource
@@ -815,9 +813,16 @@ var serviceProductInheritOnlyPolicy = '<policies><inbound><base /></inbound><bac
 resource serviceProductPolicy 'Microsoft.ApiManagement/service/products/policies@2023-03-01-preview' = [for (p, i) in serviceProducts: {
   parent: serviceProduct[i]
   name: 'policy'
-  dependsOn: [serviceProductApi]
+  dependsOn: [serviceProduct]
   properties: {
     format: 'xml'
     value: empty(p.policyXml) ? serviceProductInheritOnlyPolicy : p.policyXml
   }
+}]
+
+@batchSize(1)
+resource serviceProductApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = [for link in serviceProductApiLinks: {
+  parent: serviceProduct[link.productIndex]
+  name: link.api
+  dependsOn: [serviceProductPolicy]
 }]

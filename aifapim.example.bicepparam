@@ -167,6 +167,10 @@ param serviceProducts = [
   // refuses every request instead of being open to anyone.
   // clientApplicationIds (optional) limits which client apps may ask for a person's
   // token. Keep the real IDs in the environment's own parameter file.
+  // The template writes the product, then its policy, then its API links, so a new
+  // open product never holds an API without the token check. Add it under a new
+  // name: never set open: true on an existing keyed product, whose APIs are linked
+  // already and would be keyless under its old policy until the new one is written.
   {
     name: 'open'
     displayName: 'Open (Entra token)'
@@ -240,8 +244,13 @@ param regions = [
 // limited in requests per minute, not tokens. Their DataZoneStandard quota is
 // one pool per subscription shared by every region and account in it, so the
 // capacities of all deployments of a model must add up to that pool or less.
-// Clients reach them through POST /deployments/{name}/images/generations and
-// /edits (root API) or POST /openai/v1/images/generations and /edits.
+// The routes differ by model family (see README "Image models"):
+//   FLUX-1.1-pro        create: POST /openai/v1/images/generations?api-version=preview; no edit
+//   FLUX.1-Kontext-pro  create: as above; edit: POST /deployments/{name}/images/edits
+//                       with api-version=2025-04-01-preview (multipart)
+//   FLUX.2-pro          create and edit: POST /providers/blackforestlabs/v1/flux-2-pro
+//                       (JSON; an edit adds input_image as base64)
+// No FLUX model edits through /openai/v1/images/edits.
 //
 // Anthropic models are only offered by Foundry in select regions (currently
 // eastus2); leave them out of regions[0] if that region cannot host them.

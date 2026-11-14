@@ -160,11 +160,12 @@ Fetch the keys with
     `cognitiveservices.azure.com`; Microsoft's documented
     `<account>.api.cognitive.microsoft.com` does not exist in DNS for these
     accounts. The response is synchronous (`data[0].b64_json`). The policy
-    has no token limit and emits `Image Count` with `Model` fixed to
-    `FLUX.2-pro`. Add another BFL model path by adding an operation to
-    `BlackForestLabs_OpenAPI.json` (the policy is model-neutral except the
-    `Model` dimension and the failover check). Grouped under `apimProductName`
-    product and the service products.
+    has no token limit and emits `Image Count`. `requestModel` (the `Model`
+    dimension, the usage record and the failover check) is the body's `model`,
+    `FLUX.2-pro` when it is left out, kept only when it is a plain deployment
+    name. Add another BFL model path by adding an operation to
+    `BlackForestLabs_OpenAPI.json`. Grouped under `apimProductName` product
+    and the service products.
   - `mai-image-api` — path `mai/v1`, `POST /images/generations` (JSON) and
     `POST /images/edits` (multipart, up to five reference images). Microsoft's
     MAI image models use these routes on the account's `services.ai.azure.com`
@@ -341,6 +342,12 @@ Fetch the keys with
       recorded with `CallerType` `key`, the subscription's id and display name,
       and its own product; because subscriptions are named by the Entra object
       id, a person's key and token give the same `CallerId`.
+    - **Write order: product, policy, then API links.** The token check is in
+      place before the product holds any API, and a failed policy write leaves
+      a product with no APIs. This only holds for a new product: setting
+      `open: true` on an existing keyed product flips it to keyless while its
+      old policy and links are still there. Add an open product under a new
+      name instead.
     - **Side effect:** creating the open product also created an active key for
       APIM's built-in Administrator (owner `/users/1`). It does not skip the
       token check (a valid key puts the request in its own product, so this
