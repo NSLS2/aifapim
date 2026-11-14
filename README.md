@@ -376,7 +376,8 @@ Pay particular attention to:
   covers its whole range) on top of the global list. `entraAuth`
   (`{ tenantId, audience, role }`) makes the product need a Microsoft Entra ID
   app-only token as well as the key (see "Authentication model"). `open: true`
-  makes it the open product: no key, a Microsoft Entra ID token alone (see
+  makes it the open product for people: no key, a person's Microsoft Entra ID
+  token alone; services still need key and token (see
   "Open product: Entra token, no key"). See `AGENTS.md` "Products".
 - `usageTrace` — optional; writes one Application Insights trace per request to
   the five inference APIs that names the caller. Needed for the open product.
@@ -523,20 +524,22 @@ to the user product or to the other service products.
 One entry of `serviceProducts` can set `open: true`. Callers of that product
 send no subscription key, only `Authorization: Bearer <token>`. The product's
 policy, `apim_policies/Product_EntraOpen_Policy.xml`, is then the only access
-check, and accepts two kinds of caller:
+check, and accepts people only:
 
 - **A person**: a delegated token for this gateway whose `scp` claim holds
   `entraAuth.scope` and whose `roles` claim holds `entraAuth.userRole` (an app
   role assigned to the person, or to a group they are in, in Entra ID).
   `entraAuth.clientApplicationIds` (optional) limits which client apps may ask
   for a person's token.
-- **A service principal**: an app-only token obtained with a certificate that
-  holds `entraAuth.role`, as for the key-and-token product.
+- **Not a service principal.** An app-only token is refused with HTTP 403
+  (`KeyRequired`). A service calls with its subscription key and its token
+  through a key-and-token product, so switching its key off always stops it.
+  Without the key, or with a key that is not valid, APIM would send it here.
 
 Things to know:
 
-- **It needs all of `tenantId`, `audience`, `role`, `scope` and
-  `userRole`.** With less, or with no `entraAuth`, the product renders a
+- **It needs all of `tenantId`, `audience`, `scope` and `userRole`**
+  (`role` is not used). With less, or with no `entraAuth`, the product renders a
   policy that answers every request with HTTP 503, never an
   inheritance-only policy, which would leave the product open to anyone.
 - **An API can be in only one open product.** The API policies still say a

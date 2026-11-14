@@ -291,14 +291,15 @@ var productIpPolicyTemplate = loadTextContent('apim_policies/Product_IpRestricte
 var productEntraAuthPolicyTemplate = loadTextContent('apim_policies/Product_EntraAuth_Policy.xml')
 
 // The open product needs no subscription key, so its policy is the only access
-// check. It is rendered only when entraAuth is complete (tenantId, audience, role,
-// scope and userRole); anything less renders a policy that refuses every request, never an
+// check. It accepts people only (services must send key and token, in their own
+// product). It is rendered only when entraAuth is complete (tenantId, audience,
+// scope and userRole; role is not used); anything less renders a policy that refuses every request, never an
 // inheritance-only one, which would leave the product open to anyone. The optional
 // clientApplicationIds list is written as client-application-ids in the branch
 // that validates a person's token.
 var productEntraOpenPolicyTemplate = loadTextContent('apim_policies/Product_EntraOpen_Policy.xml')
 var productDenyAllPolicyXml = '<policies><inbound><base /><return-response><set-status code="503" reason="Service Unavailable" /><set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header><set-body>{"error":{"code":"ProductNotConfigured","message":"This product is open but its Entra ID settings are incomplete."}}</set-body></return-response></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
-func entraOpenComplete(e object) bool => !empty(e.?tenantId ?? '') && !empty(e.?audience ?? '') && !empty(e.?role ?? '') && !empty(e.?scope ?? '') && !empty(e.?userRole ?? '')
+func entraOpenComplete(e object) bool => !empty(e.?tenantId ?? '') && !empty(e.?audience ?? '') && !empty(e.?scope ?? '') && !empty(e.?userRole ?? '')
 func clientAppsXml(ids array) string => empty(ids) ? '' : '<client-application-ids>\n                        ${join(map(ids, id => '<application-id>${replace(replace(replace(replace(replace(id, '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '"', '&quot;'), '\'', '&apos;')}</application-id>'), '\n                        ')}\n                    </client-application-ids>'
 var serviceProductsResolved = map(serviceProducts, p => {
   name: p.name
@@ -307,7 +308,7 @@ var serviceProductsResolved = map(serviceProducts, p => {
   open: p.?open ?? false
   policyXml: (p.?open ?? false)
     ? (entraOpenComplete(p.?entraAuth ?? {})
-        ? replace(replace(replace(replace(replace(replace(replace(productEntraOpenPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [])), '__ENTRA_CLIENT_APPS__', clientAppsXml(p.entraAuth.?clientApplicationIds ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_ROLE__', xmlEscape(p.entraAuth.role)), '__ENTRA_SCOPE__', xmlEscape(p.entraAuth.scope)), '__ENTRA_USER_ROLE__', xmlEscape(p.entraAuth.userRole))
+        ? replace(replace(replace(replace(replace(replace(productEntraOpenPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [])), '__ENTRA_CLIENT_APPS__', clientAppsXml(p.entraAuth.?clientApplicationIds ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_SCOPE__', xmlEscape(p.entraAuth.scope)), '__ENTRA_USER_ROLE__', xmlEscape(p.entraAuth.userRole))
         : productDenyAllPolicyXml)
     : !empty(p.?entraAuth ?? {})
     ? replace(replace(replace(replace(productEntraAuthPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_ROLE__', xmlEscape(p.entraAuth.role))

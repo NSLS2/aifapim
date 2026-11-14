@@ -273,23 +273,28 @@ Fetch the keys with
     `approvalRequired` at all: APIM refuses any value for it, even `false`, when
     no subscription is required (found on the first dev deploy).
     - **Its policy is the only access check.** `Product_EntraOpen_Policy.xml`
-      is rendered only when `entraAuth` has `tenantId`, `audience`, `role`,
-      `scope` and `userRole`; otherwise the product gets a policy that
+      is rendered only when `entraAuth` has `tenantId`, `audience`, `scope`
+      and `userRole` (`role` is not used); otherwise the product gets a policy that
       answers 503, never the inheritance-only one (that would be anonymous
       access). An API can be in
       only one open product, so there is at most one; APIM's own refusal of a
       second one is not verified.
-    - **Two callers, two validations.** The policy reads `idtyp` from the token
-      before it is validated, only to pick a branch: `app` goes to the service
-      principal checks (audience, `roles`, `idtyp` `app`, `azpacr` `2`, as in
-      `Product_EntraAuth_Policy.xml`), anything else to the person checks
-      (audience, `scp` holds `scope`, `roles` holds `userRole`, and
-      `client-application-ids` when `clientApplicationIds` is set). Each
-      branch validates signature, tenant and audience, so naming the wrong
-      branch only fails the stricter check.
+    - **People only; a service needs key AND token.** The policy reads
+      `idtyp` from the token before it is validated: an app token (`app`) is
+      refused with 403 `KeyRequired`. Anything else must pass the person
+      checks (signature, tenant, audience, `scp` holds `scope`, `roles` holds
+      `userRole`, and `client-application-ids` when `clientApplicationIds` is
+      set); an app token has no `scp`, so one that hides its `idtyp` still
+      fails. Why: APIM sends a request with no key, or with a key that is not
+      valid, to the open product. When it accepted app tokens (until
+      2026-11-14), a beamline agent could leave its key out or use a
+      suspended one, so switching a key off no longer stopped it, and the
+      agents product's NAT-pool lock was held only by the global allow-list.
+      Services call with key and token through the agents product
+      (`Product_EntraAuth_Policy.xml`), where both are checked.
     - **The caller is the token's `oid`**, which must look like a GUID or the
       request is refused with 401. The policy sets `callerId`, `callerName`
-      (the `name` claim, or `app:<azp>`), `callerType` and `callerClient`, and
+      (the `name` claim), `callerType` (`user`) and `callerClient`, and
       deletes `Authorization`. The five inference policies turn these into
       `usageId` and `usageName` after their first `<base />`:
       `context.Subscription == null ? caller : subscription`. **Nothing may read
@@ -352,9 +357,9 @@ Fetch the keys with
       APIM's built-in Administrator (owner `/users/1`). It does not skip the
       token check (a valid key puts the request in its own product, so this
       product's policy still runs), but delete it, as for any new product.
-    - **Not verified yet:** the service-principal branch (an app-only
-      certificate token with `Inference.Invoke`); that APIM refuses a second
-      open product.
+    - **Not verified yet:** that an app-only token gets 403 on the gateway
+      (the expressions are tested, the deploy is not); that APIM refuses a
+      second open product.
     - Check expressions with `pwsh -NoProfile -File
       tests/policy/caller-policy-test.ps1` (fake context, unsigned tokens; it
       does not run `validate-azure-ad-token`).

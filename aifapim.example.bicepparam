@@ -166,10 +166,11 @@ param serviceProducts = [
     }
   }
   // The OPEN product: no subscription key, the Entra ID access token alone decides.
-  // People call with a delegated token that holds `scope`; service principals with
-  // an app-only token (certificate) that holds `role`. An API can be in only one
+  // People only: a delegated token that holds `scope` and the `userRole` app role.
+  // An app-only (service) token is refused with 403: a service must send its key AND
+  // its token, through a key-and-token product such as services-token above. An API can be in only one
   // open product, so there is at most one entry with open: true. With an incomplete
-  // entraAuth (tenantId, audience, role, scope and userRole are all needed) the product
+  // entraAuth (tenantId, audience, scope and userRole are all needed) the product
   // refuses every request instead of being open to anyone.
   // clientApplicationIds (optional) limits which client apps may ask for a person's
   // token. Keep the real IDs in the environment's own parameter file.
@@ -180,12 +181,11 @@ param serviceProducts = [
   {
     name: 'open'
     displayName: 'Open (Entra token)'
-    description: 'No key: people and services call with a Microsoft Entra ID access token.'
+    description: 'No key: people call with a Microsoft Entra ID access token.'
     open: true
     entraAuth: {
       tenantId: '00000000-0000-0000-0000-000000000000'    // example, replace
       audience: '00000000-0000-0000-0000-000000000000'    // example, replace: client ID of the gateway API app
-      role: 'Inference.Invoke'                            // example, replace: an app role for services
       scope: 'access_as_user'                             // example, replace: a delegated scope for people
       userRole: 'Inference.User'                          // example, replace: an app role a person must hold
       // clientApplicationIds: [

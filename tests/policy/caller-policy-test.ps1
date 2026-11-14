@@ -99,14 +99,15 @@ foreach ($file in Get-ChildItem -Path $specDir -Filter '*.yaml') {
 
 [xml]$open = Get-Content -Raw (Join-Path $PolicyDir 'Product_EntraOpen_Policy.xml')
 $validators = $open.SelectNodes('//validate-azure-ad-token')
-Check ($validators.Count -eq 2) 'open product policy has two validate-azure-ad-token branches'
-Check ((@($validators | Where-Object { $_.GetAttribute('tenant-id') -eq '__ENTRA_TENANT_ID__' }).Count) -eq 2) 'both branches validate the tenant'
-Check ((@($validators | Where-Object { $_.audiences.audience -eq '__ENTRA_AUDIENCE__' }).Count) -eq 2) 'both branches validate the audience'
-$person = @($validators | Where-Object { $_.SelectNodes('.//claim[@name="scp"]').Count -gt 0 })
-Check ($person.Count -eq 1) 'exactly one branch is the person branch (requires the scp claim)'
-Check ($person[0].SelectNodes('.//claim[@name="roles"]/value').InnerText -eq '__ENTRA_USER_ROLE__') 'the person branch also requires the user app role'
-$service = @($validators | Where-Object { $_.SelectNodes('.//claim[@name="scp"]').Count -eq 0 })
-Check (($service.Count -eq 1) -and ($service[0].SelectNodes('.//claim[@name="azpacr"]/value').InnerText -eq '2')) 'the service branch requires a certificate token (azpacr 2)'
+Check ($validators.Count -eq 1) 'open product policy validates one kind of token (a person)'
+Check ($validators[0].GetAttribute('tenant-id') -eq '__ENTRA_TENANT_ID__') 'it validates the tenant'
+Check ($validators[0].audiences.audience -eq '__ENTRA_AUDIENCE__') 'it validates the audience'
+Check ($validators[0].SelectNodes('.//claim[@name="scp"]/value').InnerText -eq '__ENTRA_SCOPE__') 'it requires the delegated scope (an app token has none)'
+Check ($validators[0].SelectNodes('.//claim[@name="roles"]/value').InnerText -eq '__ENTRA_USER_ROLE__') 'it requires the user app role'
+# A service must send key and token, so the open product refuses app tokens before validating.
+$appBranch = $open.SelectSingleNode('//choose/when[contains(@condition, "callerIsApp")]')
+Check (($null -ne $appBranch) -and ($appBranch.SelectSingleNode('return-response/set-status').code -eq '403') -and ($appBranch.SelectNodes('.//validate-azure-ad-token').Count -eq 0)) 'an app token is refused with 403, never validated or accepted'
+Check (-not (Get-Content -Raw (Join-Path $PolicyDir 'Product_EntraOpen_Policy.xml')).Contains('__ENTRA_ROLE__')) 'the open product does not use the service app role'
 
 # ---- compiled expressions ------------------------------------------------------------------
 function MetaBody($xml, $name) {
@@ -188,7 +189,7 @@ $user = Token @{ oid = $oid; name = 'Ada Lovelace'; azp = '11111111-1111-1111-11
 $app = Token @{ oid = $oid; idtyp = 'app'; azp = '22222222-2222-2222-2222-222222222222'; azpacr = '2'; roles = @('Inference.Invoke') }
 
 # Which branch the token takes.
-Check ([Pol]::CallerIsApp((Context "Bearer $app")) -eq $true) 'app-only token takes the service principal branch'
+Check ([Pol]::CallerIsApp((Context "Bearer $app")) -eq $true) 'app-only token is recognised (and refused)'
 Check ([Pol]::CallerIsApp((Context "bearer $app")) -eq $true) 'the Bearer scheme is matched without regard to case'
 Check ([Pol]::CallerIsApp((Context "Bearer $user")) -eq $false) 'delegated token takes the person branch'
 Check ([Pol]::CallerIsApp((Context (('Bearer ' + (Token @{ oid = $oid; idtyp = 'user' }))))) -eq $false) 'idtyp user takes the person branch'
@@ -209,10 +210,6 @@ $c.Variables.d['callerId'] = [Pol]::CallerId($c)
 Check ([Pol]::CallerClient($c) -eq '11111111-1111-1111-1111-111111111111') 'client app is azp'
 $c.Variables.d['callerClient'] = [Pol]::CallerClient($c)
 Check ([Pol]::CallerName($c) -eq 'Ada Lovelace') 'a person is named by the name claim'
-$c = WithToken $app $true
-$c.Variables.d['callerId'] = [Pol]::CallerId($c)
-$c.Variables.d['callerClient'] = [Pol]::CallerClient($c)
-Check ([Pol]::CallerName($c) -eq 'app:22222222-2222-2222-2222-222222222222') 'a service principal is named by its client app'
 Check ([Pol]::CallerId((WithToken (Token @{ name = 'x' }) $false)) -eq '') 'a token with no oid has no identity (the request is refused)'
 Check ([Pol]::CallerId((WithToken (Token @{ oid = 'not-a-guid' }) $false)) -eq '') 'an oid that is not a GUID has no identity (the request is refused)'
 Check ([Pol]::CallerId((WithToken (Token @{ oid = "$oid\nX" }) $false)) -eq '') 'an oid with extra text has no identity (the request is refused)'
@@ -227,7 +224,6 @@ Check ((NameFor @{ oid = $oid; preferred_username = 'ada@example.org' }) -eq 'ad
 Check ((NameFor @{ oid = $oid }) -eq $oid.ToLowerInvariant()) 'with neither, the object id is the name'
 Check ((NameFor @{ oid = $oid; name = "Ada`nLovelace`t" }) -eq 'Ada_Lovelace_') 'control characters in a name are replaced'
 Check ((NameFor @{ oid = $oid; name = ('x' * 300) }).Length -eq 100) 'a long name is cut to 100 characters'
-Check ((NameFor @{ oid = $oid; idtyp = 'app'; appid = 'abc' } $true) -eq 'app:abc') 'a v1 token without azp is named by appid'
 
 # Naming the caller in an inference policy: a key wins, a keyless request uses the caller.
 $c = New-Object Ctx

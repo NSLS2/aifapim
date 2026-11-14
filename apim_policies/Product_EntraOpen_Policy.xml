@@ -5,27 +5,27 @@
              a Microsoft Entra ID access token. aifapim.bicep builds it from the entraAuth
              and open settings of the product: the ip-filter block (only when the product
              has allowedClientIps), the tenant, the audience (the client ID of the gateway
-             API app, as a v2 token carries it), the app role for services, the delegated
-             scope and the user app role for people and, optionally, the client apps allowed to ask for a person's
-             token. It runs where an API policy calls <base />, which every API policy
+             API app, as a v2 token carries it), the delegated scope and the user app
+             role, and, optionally, the client apps allowed to ask for a person's token. It runs where an API policy calls <base />, which every API policy
              here does.
              Because there is no key, THIS POLICY IS THE ONLY ACCESS CHECK for a keyless
              request: without it the product would be anonymous. aifapim.bicep therefore
              renders a deny-all policy instead when the product is open but has no
              complete entraAuth, and never the inheritance-only policy.
-             Two kinds of caller are accepted:
-             - a service principal: an app-only token (idtyp app) obtained with a
-               certificate (azpacr 2) that holds the app role, as in
-               Product_EntraAuth_Policy.xml;
-             - a person: a delegated token that holds the scope in its scp claim and the
-               user app role in its roles claim (assigned to the person or to a group of
-               theirs in Entra ID). An app token has no scp claim, so it cannot pass as a
-               person.
-             The branch is chosen from the token's own idtyp claim before it is validated.
-             That is safe: each branch validates the signature, the tenant and the
-             audience, and a token that names the wrong branch fails its claims.
+             Only PEOPLE are accepted: a delegated token that holds the scope in its scp
+             claim and the user app role in its roles claim (assigned to the person or to
+             a group of theirs in Entra ID).
+             SERVICES ARE REFUSED HERE (403). A service (a beamline agent) must send both
+             its subscription key and its app token, and is handled in its own keyed
+             product (Product_EntraAuth_Policy.xml). If this product accepted app tokens,
+             a service could leave its key out, or send a suspended one (APIM ignores a
+             key that is not valid and comes here), so switching a key off would no
+             longer stop it. The refusal is chosen from the token's own idtyp claim
+             before it is validated; that is safe because a token that claims not to be
+             an app still has to pass the person checks, and an app token has no scp
+             claim, so it cannot pass as a person.
              After validation the caller is named by the oid claim (the object id of the
-             person or the service principal), which is also how personal subscriptions
+             person), which is also how personal subscriptions
              are named (see aifapim-key-issuance in the docs repository). The API policies
              read callerId, callerName and callerType to name the caller where they used
              to read the subscription. A request with a valid key never reaches this
@@ -40,22 +40,13 @@
         }" />
         <choose>
             <when condition="@(context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;callerIsApp&quot;, false))">
-                <validate-azure-ad-token tenant-id="__ENTRA_TENANT_ID__" output-token-variable-name="callerJwt" failed-validation-httpcode="401" failed-validation-error-message="A valid Microsoft Entra ID access token (Authorization: Bearer) for this gateway is required.">
-                    <audiences>
-                        <audience>__ENTRA_AUDIENCE__</audience>
-                    </audiences>
-                    <required-claims>
-                        <claim name="roles">
-                            <value>__ENTRA_ROLE__</value>
-                        </claim>
-                        <claim name="idtyp">
-                            <value>app</value>
-                        </claim>
-                        <claim name="azpacr">
-                            <value>2</value>
-                        </claim>
-                    </required-claims>
-                </validate-azure-ad-token>
+                <return-response>
+                    <set-status code="403" reason="Forbidden" />
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-body>{"error":{"code":"KeyRequired","message":"A service must call with its subscription key (x-api-key) as well as its access token."}}</set-body>
+                </return-response>
             </when>
             <otherwise>
                 <validate-azure-ad-token tenant-id="__ENTRA_TENANT_ID__" output-token-variable-name="callerJwt" failed-validation-httpcode="401" failed-validation-error-message="A valid Microsoft Entra ID access token (Authorization: Bearer) for this gateway is required.">
@@ -93,7 +84,7 @@
                 </return-response>
             </when>
         </choose>
-        <set-variable name="callerType" value="@(context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;callerIsApp&quot;, false) ? &quot;app&quot; : &quot;user&quot;)" />
+        <set-variable name="callerType" value="user" />
         <!-- The client app that asked for the token (azp, or appid in a v1 token). -->
         <set-variable name="callerClient" value="@{
             var j = (Jwt)context.Variables[&quot;callerJwt&quot;];
@@ -101,16 +92,12 @@
             c = System.Text.RegularExpressions.Regex.Replace(c, &quot;[^A-Za-z0-9._@\\-]&quot;, &quot;_&quot;);
             return c.Length &gt; 64 ? c.Substring(0, 64) : c;
         }" />
-        <!-- A readable name for the metrics: the display name of a person, or the client
-             app of a service principal. Control characters are replaced and the length is
+        <!-- A readable name for the metrics: the display name of the person. Control characters are replaced and the length is
              cut, so a name cannot add lines or bulk to a log or a metric dimension. It is
              never used to decide access. -->
         <set-variable name="callerName" value="@{
             var j = (Jwt)context.Variables[&quot;callerJwt&quot;];
-            var isApp = context.Variables.GetValueOrDefault&lt;bool&gt;(&quot;callerIsApp&quot;, false);
-            var n = isApp
-                ? &quot;app:&quot; + (string)context.Variables.GetValueOrDefault(&quot;callerClient&quot;, &quot;&quot;)
-                : j.Claims.GetValueOrDefault(&quot;name&quot;, j.Claims.GetValueOrDefault(&quot;preferred_username&quot;, &quot;&quot;));
+            var n = j.Claims.GetValueOrDefault(&quot;name&quot;, j.Claims.GetValueOrDefault(&quot;preferred_username&quot;, &quot;&quot;));
             n = System.Text.RegularExpressions.Regex.Replace(n ?? &quot;&quot;, &quot;\\p{C}&quot;, &quot;_&quot;);
             if (n.Length == 0) { return (string)context.Variables.GetValueOrDefault(&quot;callerId&quot;, &quot;&quot;); }
             return n.Length &gt; 100 ? n.Substring(0, 100) : n;
