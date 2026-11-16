@@ -334,6 +334,8 @@ paths:
           $ref: ./examples/audio_translation_object.yaml
         Create an audio translation with text response format.:
           $ref: ./examples/audio_translation_text.yaml
+  # Local note: Foundry answers 404 for the FLUX models on this path; they create
+  # images only through /openai/v1/images/generations (see AGENTS.md).
   /deployments/{deployment-id}/images/generations:
     post:
       summary: Generates a batch of images from a text caption on a given DALLE model deployment

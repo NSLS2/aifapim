@@ -549,9 +549,15 @@ Fetch the keys with
     `az cognitiveservices usage list -l <region>`
     (`AIServices.DataZoneStandard.FLUX.2-pro` and so on) before choosing
     capacities, and keep the sum over all deployments at or below the limit.
-  - They are served under `api-version=preview`, return base64 images, and
-    are reached through `POST /deployments/{name}/images/{generations,edits}`
-    (root API) and `POST /openai/v1/images/{generations,edits}` (v1 API). The
+  - They are served under `api-version=preview` and return base64 images.
+    `FLUX-1.1-pro` and `FLUX.1-Kontext-pro` create through
+    `POST /openai/v1/images/generations` (v1 API) only, and `FLUX.1-Kontext-pro`
+    edits through `POST /deployments/{name}/images/edits` (root API, with
+    `api-version=2025-04-01-preview`) only. The gateway also routes
+    `POST /deployments/{name}/images/generations`, but Foundry answers 404 for
+    FLUX there: every such call on prod in October and November 2026 got 404
+    from the backend (`BackendResponseCode` 404 in `ApiManagementGatewayLogs`),
+    and `examples/test-apim.py` used that path until 2026-11-16. The
     `images/edits` operations are local additions to the specs (upstream
     2024-10-21 has no edits).
   - Both inference policies skip the token limit and token metric policies
@@ -987,7 +993,7 @@ python examples/test-apim.py
 
    Every `run_chat`, `run_chat_v1`, `run_anthropic`, and `run_embedding_v1`
    call should print a coherent answer (or, for embeddings, a vector dimension
-   and prompt-token count). The `run_image` and `run_image_v1` calls write the
+   and prompt-token count). The `run_flux2` and `run_image_v1` calls write the
    generated and edited images to a temporary directory and print each path
    and size.
 4. Smoke-test the `/models` listing routes added to the inference APIs and
