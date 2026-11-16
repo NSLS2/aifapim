@@ -1,0 +1,7 @@
+# Gitleaks settings: the default rules, plus one allowlisted file.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Built-in Azure role definition IDs (public GUIDs from Microsoft's documentation), not secrets"
+paths = ['''^azure_roles\.json$''']

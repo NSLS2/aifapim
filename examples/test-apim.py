@@ -182,31 +182,13 @@ def save_images(response, name: str) -> bytes:
     return first
 
 
-def run_image(deployment_name: str) -> bytes:
-    """Create an image on the root (deployment) path. Returns the image bytes."""
-    print(f"\n========== Image deployment: {deployment_name} ==========\n")
+def run_image_v1(deployment_name: str, edit: bool = False, edit_via_deployments: bool = False) -> bytes:
+    """Create an image on the v1 path; edit it too when edit is set. For FLUX-1.1-pro and FLUX.1-Kontext-pro this is
+    the only create path (FLUX.2-pro uses the provider route, see run_flux2).
 
-    client = AzureOpenAI(
-        base_url=f"{endpoint}/deployments/{deployment_name}",
-        api_key="placeholder",
-        default_headers={"x-api-key": api_key},
-        api_version=image_api_version,
-    )
-
-    response = client.images.generate(
-        model=deployment_name,
-        prompt="A photograph of a red fox in an autumn forest",
-        n=1,
-        size="1024x1024",
-    )
-    return save_images(response, f"{deployment_name}-generate")
-
-
-def run_image_v1(deployment_name: str, edit_source: bytes = b"", edit_via_deployments: bool = False) -> bytes:
-    """Create an image on the v1 path; edit edit_source too when it is given.
-
-    edit_via_deployments sends the edit to /deployments/<name>/images/edits
-    (FLUX.1-Kontext-pro), because the v1 edit route does not serve FLUX.
+    The root path (/deployments/<name>/images/generations) is routed by the gateway, but Foundry answers 404 for
+    FLUX there (every call on prod, Oct-Nov 2026). edit_via_deployments sends the edit to
+    /deployments/<name>/images/edits (FLUX.1-Kontext-pro), because the v1 edit route does not serve FLUX.
     """
     print(f"\n========== Image deployment (v1): {deployment_name} ==========\n")
 
@@ -225,14 +207,14 @@ def run_image_v1(deployment_name: str, edit_source: bytes = b"", edit_via_deploy
     )
     created = save_images(response, f"{deployment_name}-v1-generate")
 
-    if edit_source:
+    if edit:
         print(f"\n---------- Image edit: {deployment_name} ----------\n")
         if edit_via_deployments:
             edit = httpx.post(
                 f"{endpoint}/deployments/{deployment_name}/images/edits",
                 params={"api-version": image_edit_api_version},
                 headers={"x-api-key": api_key},
-                files={"image": ("input.png", edit_source, "image/png")},
+                files={"image": ("input.png", created, "image/png")},
                 data={"prompt": "Make it a snowy winter scene"},
                 timeout=120,
             )
@@ -245,7 +227,7 @@ def run_image_v1(deployment_name: str, edit_source: bytes = b"", edit_via_deploy
         else:
             response = client.images.edit(
                 model=deployment_name,
-                image=("input.png", edit_source, "image/png"),
+                image=("input.png", created, "image/png"),
                 prompt="Make it a snowy winter scene",
             )
             save_images(response, f"{deployment_name}-v1-edit")
@@ -309,13 +291,13 @@ if __name__ == "__main__":
     # Test the image models (Black Forest Labs FLUX, DataZoneStandard) through
     # APIM. Each family has its own route:
     #   FLUX.2-pro          create and edit on the provider route only
-    #   FLUX.1-Kontext-pro  create on the root and v1 paths; edit through
+    #   FLUX.1-Kontext-pro  create on the v1 path; edit through
     #                       /deployments/<name>/images/edits
-    #   FLUX-1.1-pro        create only, on the root and v1 paths
+    #   FLUX-1.1-pro        create only, on the v1 path
+    # Foundry answers 404 for FLUX on the root create path,
+    # /deployments/<name>/images/generations.
     run_flux2("FLUX.2-pro")
 
-    created = run_image("FLUX.1-Kontext-pro")
-    run_image_v1("FLUX.1-Kontext-pro", created, edit_via_deployments=True)
+    run_image_v1("FLUX.1-Kontext-pro", edit=True, edit_via_deployments=True)
 
-    created = run_image("FLUX-1.1-pro")
     run_image_v1("FLUX-1.1-pro")
