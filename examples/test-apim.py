@@ -122,9 +122,15 @@ def run_chat(deployment_name: str) -> None:
 def run_anthropic(deployment_name: str) -> None:
     print(f"\n========== Querying Anthropic deployment: {deployment_name} ==========\n")
 
+    # The gateway reads the key from the x-api-key header. Do not pass it as
+    # api_key=: anthropic 2.x sends that as "Authorization: Bearer", so the
+    # gateway answers 401 "missing subscription key", and 0.x merges it with
+    # the header below into "KEY, KEY". auth_token is a placeholder the SDK
+    # requires; it works on both.
     client = Anthropic(
         base_url=f"{endpoint}/anthropic",
-        api_key=api_key
+        auth_token="placeholder",
+        default_headers={"x-api-key": api_key},
     )
 
     response = client.messages.create(

@@ -62,6 +62,13 @@ print(response.choices[0].message.content)
 > `base_url` internally, so set `base_url=https://{AIFAPIM_HOST}/anthropic`.
 > Raw HTTP clients and OpenCode (which do not append `/v1`) should use
 > `https://{AIFAPIM_HOST}/anthropic/v1` instead.
+>
+> **Key note:** Send the key in the `x-api-key` header as shown; do not pass
+> it as `api_key=`. From `anthropic` 2.0 `api_key=` is sent as
+> `Authorization: Bearer`, which the gateway does not read, so the call fails
+> with `401 Access denied due to missing subscription key`. Older SDKs send
+> `api_key=` as `x-api-key`, and combined with `default_headers` they join
+> both into `KEY, KEY`; `auth_token` works on all versions.
 
 ```python
 from anthropic import Anthropic
@@ -73,7 +80,8 @@ api_key = os.environ["AIFAPIM_API_KEY"]
 
 client = Anthropic(
     base_url=f"{endpoint}/anthropic",
-    api_key=api_key
+    auth_token="placeholder",  # required by the SDK, ignored by the gateway
+    default_headers={"x-api-key": api_key},
 )
 
 response = client.messages.create(
