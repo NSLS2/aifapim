@@ -41,6 +41,10 @@ jobs:
           pixi-version: v0.83.0
           cache: false
           frozen: true
+          # The default environment has no packages, and pixi 0.83 makes the
+          # action's `pixi list` fail on an empty environment; install and
+          # list dev, the one the lint uses.
+          environments: dev
 
       - name: Install dev environment
         run: pixi install -e dev
