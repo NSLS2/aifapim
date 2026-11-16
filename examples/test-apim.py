@@ -183,7 +183,8 @@ def save_images(response, name: str) -> bytes:
 
 
 def run_image_v1(deployment_name: str, edit: bool = False, edit_via_deployments: bool = False) -> bytes:
-    """Create an image on the v1 path, the only one where Azure creates FLUX images; edit it too when edit is set.
+    """Create an image on the v1 path; edit it too when edit is set. For FLUX-1.1-pro and FLUX.1-Kontext-pro this is
+    the only create path (FLUX.2-pro uses the provider route, see run_flux2).
 
     The root path (/deployments/<name>/images/generations) is routed by the gateway, but Foundry answers 404 for
     FLUX there (every call on prod, Oct-Nov 2026). edit_via_deployments sends the edit to

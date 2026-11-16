@@ -553,7 +553,9 @@ Fetch the keys with
     `FLUX-1.1-pro` and `FLUX.1-Kontext-pro` create through
     `POST /openai/v1/images/generations` (v1 API) only, and `FLUX.1-Kontext-pro`
     edits through `POST /deployments/{name}/images/edits` (root API, with
-    `api-version=2025-04-01-preview`) only. The gateway also routes
+    `api-version=2025-04-01-preview`) only. `FLUX.2-pro` uses neither: it
+    creates and edits on the provider route (see `black-forest-labs-api`
+    above). The gateway also routes
     `POST /deployments/{name}/images/generations`, but Foundry answers 404 for
     FLUX there: every such call on prod in October and November 2026 got 404
     from the backend (`BackendResponseCode` 404 in `ApiManagementGatewayLogs`),
