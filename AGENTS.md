@@ -591,6 +591,38 @@ Fetch the keys with
     deployed as `GlobalStandard`; the `/catalog/images` entry says `Global`.
     The `gpt-image-*` models use the OpenAI v1 image routes (they are in
     eastus2 only), the MAI models the `mai-image-api` (eastus only).
+- **Speech-to-text models** (`gpt-transcribe`, `gpt-4o-transcribe`) are
+  deployed in the eastus2 account only, so there is no failover. They take an
+  audio file of up to 25 MB (Microsoft's quotas page says 20 MB; keep uploads
+  under that) on the deployment route of the root API:
+  `POST /deployments/{name}/audio/transcriptions?api-version=2025-04-01-preview`
+  (no `/openai` prefix: that API has an empty path; `2024-10-21` works too).
+  **The v1 route does not work**: `POST /openai/v1/audio/transcriptions`
+  answers `DeploymentNotFound` for any model name, real or not, with
+  `api-version=preview` or without, and `API version not supported` for
+  `2025-04-01-preview` (dev, 2026-11-23). It is not in the v1 spec.
+  `gpt-transcribe` offers only `GlobalStandard` (may process outside the US);
+  `gpt-4o-transcribe` is `DataZoneStandard`. A capacity of c is c requests and
+  c thousand tokens per minute (`properties.rateLimits` of the deployment; the
+  quota in `az cognitiveservices usage list` is in the same units). Neither
+  model returns timestamps or speaker labels: `gpt-4o-transcribe` answers
+  `{"text", "usage": {"type": "tokens", ...}}` and `gpt-transcribe`
+  `{"text", "languages", "usage": {"type": "duration", "seconds": N}}`. In the
+  AOAI policy:
+  - paths containing `/audio/` skip the token limit and token metric and emit
+    an `Audio Count` metric (1 per 200 response, `Model` dimension = the
+    deployment name) in `<outbound>`;
+  - **audio is limited per caller** (`audioRequestsPerMinute`, default 10),
+    with the counter key `audio:` + `usageId`, set before the request body log
+    like the image limit;
+  - **the request body log never stores audio**: for an audio path
+    `RequestBodyLog_Fragment.xml` writes one text line,
+    `audio upload not stored, content-length=N`, with content type
+    `text/plain`; the caller, API and model are still in the blob metadata.
+    The log is write-once, so audio of a meeting must not enter it.
+  `tests/policy/caller-policy-test.ps1` checks the limit, its position and
+  the request log expressions; `pixi run test-audio-dev` in `aifapim-config`
+  checks the live route and the limit.
 - **APIM authenticates to AI Foundry via system-assigned managed identity**
   (no API keys to backends). End-users authenticate to APIM via APIM
   subscription keys.

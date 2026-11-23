@@ -64,10 +64,22 @@ foreach ($name in $inference) {
         Check ($limits.Count -eq 0) ('{0}: no image request limit (no image routes)' -f $name)
         continue
     }
-    Check (($limits.Count -eq 1) -and $limits[0].Value.Contains($imageLimitKey) -and $limits[0].Value.Contains('calls="__IMAGE_REQUESTS_PER_MINUTE__"')) ('{0}: one image request limit, keyed images:usageId' -f $name)
+    # The AOAI policy (the deployment routes) also limits audio transcription requests, with their own counter.
+    $audio = $name -like 'AOAI*'
+    Check (($limits.Count -eq $(if ($audio) { 2 } else { 1 })) -and $limits[0].Value.Contains($imageLimitKey) -and $limits[0].Value.Contains('calls="__IMAGE_REQUESTS_PER_MINUTE__"')) ('{0}: image request limit, keyed images:usageId' -f $name)
     $at = $text.IndexOf('<rate-limit-by-key')
     Check (($at -gt $text.IndexOf('name="usageId"')) -and ($at -lt $text.IndexOf('<!-- __REQUEST_LOG__ -->'))) ('{0}: image limit is after usageId and before the request log' -f $name)
+    if ($audio) {
+        $audioKey = 'counter-key="@(&quot;audio:&quot; + (string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;))"'
+        Check ($limits[1].Value.Contains($audioKey) -and $limits[1].Value.Contains('calls="__AUDIO_REQUESTS_PER_MINUTE__"')) ('{0}: audio request limit, keyed audio:usageId' -f $name)
+        $at = $text.LastIndexOf('<rate-limit-by-key')
+        Check (($at -gt $text.IndexOf('name="usageId"')) -and ($at -lt $text.IndexOf('<!-- __REQUEST_LOG__ -->'))) ('{0}: audio limit is after usageId and before the request log' -f $name)
+        Check ($text.Contains('name="isAudioRequest"') -and $text.Contains('name="Audio Count"')) ('{0}: skips the token limit for audio and counts audio requests' -f $name)
+    }
 }
+# The request body log stores no audio: an audio upload is replaced by one text line.
+$logText = Get-Content -Raw (Join-Path $PolicyDir 'RequestBodyLog_Fragment.xml')
+Check ($logText.Contains('Path.Contains(&quot;/audio/&quot;)') -and $logText.Contains('audio upload not stored')) 'RequestBodyLog_Fragment.xml: audio uploads are not stored'
 
 # Every API spec declares the gateway's credentials, not Azure's: the x-api-key header or an Entra
 # token (bearer), at the top level, with no operation overriding them. A client generated from a
@@ -132,11 +144,16 @@ function HeaderBody($xml, $name) {
     if ($v.StartsWith('@(') -and $v.EndsWith(')')) { return 'return ' + $v.Substring(2, $v.Length - 3) + ';' }
     throw "header $name is not an expression"
 }
+function SetBodyCode($xml) {
+    $v = $xml.SelectSingleNode('//set-body').InnerText.Trim()
+    return $v.Substring(2, $v.Length - 3)
+}
 $code = @"
 using System; using System.Collections.Generic; using System.Linq; using Newtonsoft.Json.Linq;
 public class Hdrs { public Dictionary<string,string> d = new Dictionary<string,string>(); public string GetValueOrDefault(string k, string def){ return d.ContainsKey(k)? d[k]:def; } }
-public class Bdy { public string text = ""; public T As<T>(bool preserveContent = false) { if (typeof(T)==typeof(JObject)) return (T)(object)JObject.Parse(text); throw new Exception("type"); } }
-public class Req { public Hdrs Headers = new Hdrs(); public Bdy Body = new Bdy(); }
+public class Bdy { public string text = ""; public T As<T>(bool preserveContent = false) { if (typeof(T)==typeof(JObject)) return (T)(object)JObject.Parse(text); if (typeof(T)==typeof(byte[])) return (T)(object)System.Text.Encoding.UTF8.GetBytes(text); throw new Exception("type"); } }
+public class UrlInfo { public string Path = "/"; }
+public class Req { public Hdrs Headers = new Hdrs(); public Bdy Body = new Bdy(); public UrlInfo Url = new UrlInfo(); }
 public class Vars {
   public Dictionary<string,object> d = new Dictionary<string,object>();
   public T GetValueOrDefault<T>(string k, T def) { return d.ContainsKey(k) && d[k] is T ? (T)d[k] : def; }
@@ -171,6 +188,8 @@ public static class Pol {
   public static object UsageName(Ctx context) { $(Body $anthropic 'usageName') }
   public static object UsageModel(Ctx context) { $(Body $trace 'usageModel') }
   public static object StreamMeta(Ctx context) { $(HeaderBody $reqlog 'x-ms-meta-stream') }
+  public static object LogContentType(Ctx context) { $(HeaderBody $reqlog 'x-ms-blob-content-type') }
+  public static object LogBody(Ctx context) { $(SetBodyCode $reqlog) }
 $(($metaNames | ForEach-Object { '  public static object Meta' + $_ + '(Ctx context) { ' + (MetaBody $trace $_) + ' }' }) -join "`n")
 }
 "@
@@ -288,6 +307,18 @@ Check (($m['CallerType'] -eq 'user') -and ($m['CallerId'] -eq $oid.ToLowerInvari
 $c = New-Object Ctx
 $m = MetaValues $c
 Check (AllNonEmpty $m) 'trace metadata, nothing set: no value is empty (a dash is used)'
+
+# The request body log keeps a text body as it is, and replaces an audio upload by one line.
+$c = New-Object Ctx; $c.Request.Url.Path = '/openai/v1/responses'; $c.Request.Headers.d['Content-Type'] = 'application/json'; $c.Request.Body.text = '{"model":"gpt-5"}'
+Check (([Text.Encoding]::UTF8.GetString([Pol]::LogBody($c)) -eq '{"model":"gpt-5"}') -and ([Pol]::LogContentType($c) -eq 'application/json')) 'request body log: a JSON body is stored as sent'
+$c = New-Object Ctx; $c.Request.Url.Path = '/deployments/gpt-transcribe/audio/transcriptions'; $c.Request.Headers.d['Content-Type'] = 'multipart/form-data; boundary=x'
+$c.Request.Headers.d['Content-Length'] = '3500000'; $c.Request.Body.text = 'SECRET-AUDIO-BYTES'
+$stored = [Text.Encoding]::UTF8.GetString([Pol]::LogBody($c))
+Check (($stored -eq 'audio upload not stored, content-length=3500000') -and ([Pol]::LogContentType($c) -eq 'text/plain')) 'request body log: an audio upload is replaced by its size'
+$c.Request.Url.Path = '/deployments/gpt-4o-transcribe/audio/transcriptions'; $c.Request.Headers.d['Content-Length'] = "12`r`nX: y"
+Check ([Text.Encoding]::UTF8.GetString([Pol]::LogBody($c)) -eq 'audio upload not stored, content-length=12') 'request body log: the declared size is reduced to digits'
+$c.Request.Headers.d.Remove('Content-Length')
+Check ([Text.Encoding]::UTF8.GetString([Pol]::LogBody($c)) -eq 'audio upload not stored, content-length=-') 'request body log: no declared size gives a dash'
 
 "failures: $bad"
 if ($bad -gt 0) { exit 1 }

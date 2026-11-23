@@ -81,6 +81,10 @@ param backendTimeoutSeconds = 240
 // limit does not cover them. Default 10.
 param imageRequestsPerMinute = 10
 
+// ---- Audio transcription requests per caller (per minute) ----
+// One counter per caller, shared by the audio routes. Default 10.
+param audioRequestsPerMinute = 10
+
 // ---- APIM product ----
 // All three APIs (azure-openai-service-api, azure-openai-v1-messages-api,
 // anthropic-service-api) are grouped under this product. The same value is

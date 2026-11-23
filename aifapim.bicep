@@ -108,6 +108,10 @@ param backendTimeoutSeconds int = 240
 @minValue(1)
 param imageRequestsPerMinute int = 10
 
+@description('Audio transcription requests each caller may make per minute, on the audio route of the Azure OpenAI API (/deployments/{name}/audio/transcriptions), keyed like the image limit. Audio is not counted in tokens here. Over the limit the gateway answers 429 with Retry-After.')
+@minValue(1)
+param audioRequestsPerMinute int = 10
+
 @description('Host suffix of the model accounts for the Black Forest Labs provider route (FLUX.2-pro). Both are private-endpoint names with a private DNS zone. Microsoft documents api.cognitive.microsoft.com, but that name does not exist for these accounts.')
 @allowed([
   'cognitiveservices.azure.com'
@@ -201,6 +205,7 @@ var allowedIpsXml = join(map(allowedClientIps, ip => contains(ip, '/')
 // Substitutions applied to each policy XML:
 //   __BACKEND_TIMEOUT__    -> backendTimeoutSeconds (forward-request timeout)
 //   __IMAGE_REQUESTS_PER_MINUTE__ -> imageRequestsPerMinute (per-caller image limit)
+//   __AUDIO_REQUESTS_PER_MINUTE__ -> audioRequestsPerMinute (per-caller transcription limit, AOAI policy)
 //   __ALLOWED_CLIENT_IPS__ -> allowedIpsXml (ip-filter allow-list built from allowedClientIps)
 //   __METRIC_NAMESPACE__   -> apimProductName (App Insights custom-metric namespace)
 //   __SECONDARY_MODELS__   -> secondaryModelList (models deployed in the secondary region;
@@ -221,7 +226,7 @@ var requestLogXml = requestBodyLogging ? replace(replace(loadTextContent('apim_p
 // marker, before the request body log, when usageTrace is true.
 var usageTraceXml = usageTrace ? loadTextContent('apim_policies/UsageTrace_Fragment.xml') : ''
 var inboundLogXml = '${usageTraceXml}${requestLogXml}'
-var openApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+var openApiXml = replace(replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute))
 
 // Anthropic API policy (multi-region retry variant).
 // The claude-auto block (apim_policies/ClaudeAuto_Fragment.xml) replaces the

@@ -249,6 +249,43 @@ response.raise_for_status()
 png = base64.b64decode(response.json()["data"][0]["b64_json"])
 ```
 
+### Example: Transcribe audio
+
+`gpt-transcribe` and `gpt-4o-transcribe` turn an audio file into text. Send the
+file as multipart form data to
+`POST /deployments/{name}/audio/transcriptions?api-version=2025-04-01-preview`
+(the deployment name is in the path). A file may be at most 25 MB (Microsoft's
+quotas page says 20 MB, so keep to that); cut a long recording into pieces
+first. The v1 route `/openai/v1/audio/transcriptions` does not work for these
+models. `gpt-transcribe` offers only `GlobalStandard`, so audio may be
+processed outside the US; `gpt-4o-transcribe` is `DataZoneStandard`. Neither
+model returns timestamps or speaker labels.
+
+```python
+import os
+import requests
+
+host = os.environ["AIFAPIM_HOST"]
+headers = {"x-api-key": os.environ["AIFAPIM_API_KEY"]}
+
+with open("talk-part1.mp3", "rb") as f:
+    response = requests.post(
+        f"https://{host}/deployments/gpt-4o-transcribe/audio/transcriptions",
+        params={"api-version": "2025-04-01-preview"},
+        headers=headers,
+        data={"language": "en"},
+        files={"file": ("talk-part1.mp3", f, "audio/mpeg")},
+        timeout=300,
+    )
+response.raise_for_status()
+print(response.json()["text"])
+```
+
+Audio is limited per caller (`audioRequestsPerMinute`, default 10), the token
+limit and token metric policies are skipped for `/audio/` requests, and the
+policy emits an `Audio Count` metric instead. The request body log never
+stores the audio (see "Request body log").
+
 ### Example: OpenCode configuration
 
 The `examples/opencode.json` file contains a ready-to-use
@@ -763,6 +800,9 @@ workspace (`LlmRequestBody_CL`).
   irreversible step. Blobs move Hot to Cold after 7 days and to Archive after
   90, and are never deleted.
 - The workspace copy is readable by anyone with subscription-level `Reader`.
+- Audio uploads (paths containing `/audio/`) are not stored: the blob holds
+  one line with the declared size, and the metadata still names the caller,
+  API and model.
 - The function code and operator runbook are in the private `aifapim-config`
   repository (`request-log/`).
 
