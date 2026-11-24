@@ -430,7 +430,9 @@ Fetch the keys with
     that product whose `ownerId` ends in `/users/1` and delete them (the
     template cannot, because their names are generated). This happened on dev
     and prod on 2026-10-30. The older ones on `aifapim-catalog` (dev
-    `6a567c97...`, prod `6a567f70...`) were kept on purpose.
+    `6a567c97...`, prod `6a567f70...`) and the one left on prod's open product
+    (`6b04b348...`) were deleted on 2026-11-24 after the APIM Classic security
+    advisory (MZK9-GH0): no gateway call had used them in 90 days.
   - **A what-if always shows every product-to-API link as "Create".** That
     resource type answers GET with 405, so what-if cannot see the links that
     exist. Applying a link again is harmless. Check the real state with
