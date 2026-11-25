@@ -119,8 +119,8 @@ param bflEndpointDomain string = 'cognitiveservices.azure.com'
 @minLength(1)
 param allowedClientIps array
 
-@description('Also let only allowedClientIps reach the gateway at the network level (the subnet\'s network security group, ports 80 and 443), not only through the ip-filter policy. Off allows the whole Internet to reach it. Do not turn it on before the full list of callers is in allowedClientIps.')
-param restrictGatewayInbound bool = false
+@description('Sources allowed to reach the gateway at the network level (the APIM subnet\'s network security group, ports 80 and 443). Empty allows the whole Internet. Keep it to non-overlapping IPv4 addresses and CIDR ranges (a security rule refuses an address inside a range that is also listed), and keep it equal to the callers in allowedClientIps; the ip-filter policy still applies on top.')
+param gatewayInboundSources array = []
 
 @description('APIM product name (and App Insights custom-metric namespace). All three APIs are grouped under this product, and the <llm-emit-token-metric> / <emit-metric> policies emit under this namespace. Must be a valid APIM resource name (lowercase alphanumerics + hyphens).')
 param apimProductName string = 'aifapim'
@@ -546,7 +546,7 @@ module network 'modules/network.bicep' = {
     location: location
     apiManagementSubnetName: apiManagementSubnetName
     apiManagementSubnetIPPrefix: apiManagementSubnetIPPrefix
-    gatewayInboundSources: restrictGatewayInbound ? allowedClientIps : []
+    gatewayInboundSources: gatewayInboundSources
     tags: tags
   }
 }
