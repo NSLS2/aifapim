@@ -50,7 +50,7 @@ param rootCaCert string = ''
 @description('Resource ID of a user-assigned managed identity for Key Vault access. Leave empty if not using custom domains.')
 param userAssignedIdentityId string = ''
 
-@description('Client ID of the user-assigned managed identity. Required when userAssignedIdentityId is set.')
+@description('Client ID of the user-assigned managed identity that reads the custom-domain certificates from Key Vault. Leave empty to use the system-assigned identity, which a Key Vault firewall requires.')
 param userAssignedIdentityClientId string = ''
 
 @description('Disable the developer portal entirely.')
@@ -80,7 +80,7 @@ var gatewayHostnameConfig = enableCustomDomains ? [
     negotiateClientCertificate: false
     defaultSslBinding: true
     keyVaultId: '${keyVaultBaseUrl}/secrets/${gatewayKeyVaultSecretName}'
-    identityClientId: userAssignedIdentityClientId
+    identityClientId: empty(userAssignedIdentityClientId) ? null : userAssignedIdentityClientId
   }
 ] : []
 
@@ -90,7 +90,7 @@ var portalHostnameConfig = enablePortalDomain ? [
     hostName: portalHostName
     negotiateClientCertificate: false
     keyVaultId: '${keyVaultBaseUrl}/secrets/${portalKeyVaultSecretName}'
-    identityClientId: userAssignedIdentityClientId
+    identityClientId: empty(userAssignedIdentityClientId) ? null : userAssignedIdentityClientId
   }
 ] : []
 
@@ -172,15 +172,33 @@ resource apiManagementService 'Microsoft.ApiManagement/service@2023-03-01-previe
   }
 }
 
+// APIM keeps a logger's identityClientId in a secret named value and writes a new
+// one ("Logger-Credentials--<id>") on every deployment that writes the logger, so
+// they piled up (51 on prod, 88 on dev). The value is only the word systemAssigned,
+// not a secret: App Insights has local authentication off, so the connection string
+// alone cannot send telemetry. Give the logger one plain named value of our own.
+resource aiLoggerIdentity 'Microsoft.ApiManagement/service/namedValues@2023-03-01-preview' = {
+  parent: apiManagementService
+  name: 'ai-logger-identity'
+  properties: {
+    displayName: 'ai-logger-identity'
+    value: 'systemAssigned'
+    secret: false
+  }
+}
+
 resource aiLoggerWithSystemAssignedIdentity 'Microsoft.ApiManagement/service/loggers@2022-08-01' = {
   name: 'aiLoggerWithSystemAssignedIdentity'
   parent: apiManagementService
+  dependsOn: [
+    aiLoggerIdentity
+  ]
   properties: {
     loggerType: 'applicationInsights'
     description: 'Application Insights logger with connection string'
     credentials: {
       connectionString: aiParent.properties.ConnectionString
-      identityClientId: 'systemAssigned'
+      identityClientId: '{{ai-logger-identity}}'
     }
   }
 }
@@ -236,6 +254,35 @@ resource serviceDiagnostic 'Microsoft.ApiManagement/service/diagnostics@2023-03-
 // to a Log Analytics workspace so the ApiManagementGatewayLlmLog table is
 // populated for token-usage / prompt-completion analytics.
 // See https://learn.microsoft.com/azure/api-management/api-management-howto-llm-logs
+// Direct management access, pinned off. Both are off on the live instances (the
+// management REST API and the git configuration endpoint accept the tenant access
+// keys, outside Entra ID and Azure RBAC, and their calls are not in the Activity
+// log). Microsoft's advisory MZK9-GH0 (2026-11) listed tokens for the direct
+// management API as possibly exposed. They are written after the other service
+// writes and one after the other: on the Developer SKU, parallel child writes
+// fail with ServiceLocked (see AGENTS.md).
+resource tenantAccess 'Microsoft.ApiManagement/service/tenant@2024-05-01' = {
+  parent: apiManagementService
+  name: 'access'
+  dependsOn: [
+    serviceDiagnostic
+  ]
+  properties: {
+    enabled: false
+  }
+}
+
+resource tenantGitAccess 'Microsoft.ApiManagement/service/tenant@2024-05-01' = {
+  parent: apiManagementService
+  name: 'gitAccess'
+  dependsOn: [
+    tenantAccess
+  ]
+  properties: {
+    enabled: false
+  }
+}
+
 resource apimToLogAnalytics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: 'apim-genai-gateway-logs'
   scope: apiManagementService

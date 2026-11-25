@@ -841,6 +841,41 @@ APIM unit) in exchange for determinism. On Standard/Premium tiers with
 multi-unit redundancy this race does not occur and the chaining is a
 no-op cost-wise; the pinning is also harmless on those tiers.
 
+## Hardening settings (after Azure advisory MZK9-GH0, 2026-11)
+
+- **Direct management access is pinned off**
+  (`modules/api-management-private.bicep`): `tenant/access` and
+  `tenant/gitAccess` with `enabled: false`. They were off live; the template
+  now keeps them off. They are written after the service diagnostic, one after
+  the other, for the ServiceLocked reason above. **Not verified before the
+  first dev deploy:** that the PUT is accepted for both names and does not
+  regenerate their keys.
+- **The logger's identity is one plain named value** (`ai-logger-identity` =
+  `systemAssigned`). APIM used to write a new secret `Logger-Credentials--<id>`
+  on every deployment that wrote the logger (51 on prod, 88 on dev, each only
+  the word `systemAssigned`). After the deploy,
+  `aifapim-config/cleanup-logger-named-values.py` deletes the old ones. **Not
+  verified before the first dev deploy:** that APIM keeps
+  `{{ai-logger-identity}}` as it is and writes no new `Logger-Credentials--*`;
+  deploy twice and count.
+- **`vaultIdentity`** chooses which APIM identity reads the custom-domain
+  certificates from Key Vault. A Key Vault firewall needs `system`. The
+  system-assigned identity gets the Key Vault Secrets User role on every
+  deployment, after APIM exists (`kvAccessSystem`), so an existing instance
+  moves in two deployments: first `user` (adds the role only), then `system`
+  (the hostnames read the certificate with the system-assigned identity). A new
+  instance cannot start on `system`.
+- **`lockResourceGroup`** puts a CanNotDelete lock on the resource group (prod
+  only). Updates, key regeneration and deployments work; deleting anything in
+  the group (a subscription, a named value, a model deployment, a blob
+  container) needs the lock removed first and added again. ARM stops pruning
+  the deployment history in a locked group, so check it now and then (`az
+  deployment group list -g <rg> --query 'length(@)'`; the limit is 800).
+- **The APIM workspace keeps 365 days**
+  (`modules/log-analytics-workspace.bicep`, default `retentionInDays`; it was
+  90). It holds the gateway, LLM and App Insights tables. The request-log
+  prompts workspace is separate and keeps its own, much longer table retention.
+
 ## Token usage analytics quirks (verified on Developer SKU)
 
 - **Anthropic completion tokens are always 0 in BOTH

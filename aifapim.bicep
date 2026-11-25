@@ -62,6 +62,16 @@ param keyVaultResourceGroup string = ''
 @description('Key Vault secret name for the developer portal TLS certificate.')
 param portalKeyVaultSecretName string = ''
 
+@description('Which APIM managed identity reads the custom-domain certificates from Key Vault: "user" (the user-assigned identity, as before) or "system" (the system-assigned identity, which a Key Vault firewall requires). The system-assigned identity gets the Key Vault Secrets User role on every deployment, after APIM exists, so move an existing instance in two deployments: first "user", which only adds the role, then "system". A new instance cannot read the certificate with "system" on its first deployment.')
+@allowed([
+  'user'
+  'system'
+])
+param vaultIdentity string = 'user'
+
+@description('Put a CanNotDelete lock on this resource group. Updates, key regeneration and deployments still work; deleting anything in the group (a subscription, a named value, a model deployment) needs the lock removed first.')
+param lockResourceGroup bool = false
+
 @description('PEM-encoded intermediate CA certificate to install in the APIM CertificateAuthority store. Leave empty to skip. Typically populated in the bicepparam file via loadTextContent(\'resources/<your-intermediate>.pem\').')
 param intermediateCaCert string = ''
 
@@ -579,7 +589,7 @@ module apiManagement 'modules/api-management-private.bicep' = {
     intermediateCaCert: intermediateCaCert
     rootCaCert: rootCaCert
     userAssignedIdentityId: !empty(keyVaultName) ? apimIdentity!.id : ''
-    userAssignedIdentityClientId: !empty(keyVaultName) ? apimIdentity!.properties.clientId : ''
+    userAssignedIdentityClientId: !empty(keyVaultName) && vaultIdentity == 'user' ? apimIdentity!.properties.clientId : ''
     disableDeveloperPortal: disableDeveloperPortal
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
     tags: tags
@@ -589,6 +599,20 @@ module apiManagement 'modules/api-management-private.bicep' = {
     eventHub
     kvAccess
   ]
+}
+
+// The system-assigned identity exists only once APIM does, so this role is written
+// after the APIM module. See vaultIdentity.
+module kvAccessSystem 'modules/keyvault-role.bicep' = if (!empty(keyVaultName)) {
+  name: 'kvSecretUserForApimSystem'
+  scope: resourceGroup(keyVaultResourceGroup)
+  params: {
+    keyVaultName: keyVaultName
+    roleName: guid(subscription().id, keyVaultName, apiManagementServiceName, 'KeyVaultSecretUser', 'system-assigned')
+    principalId: apiManagement.outputs.apiManagementIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
+  }
 }
 
 module api 'modules/api.bicep' = {
@@ -724,6 +748,14 @@ module aiUserRoles 'modules/cognitive-services-role.bicep' = [for (region, i) in
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', azureRoles.AzureAIUser)
   }
 }]
+
+resource protect 'Microsoft.Authorization/locks@2020-05-01' = if (lockResourceGroup) {
+  name: 'protect-${resourceGroup().name}'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'Remove the lock to delete anything in this group, then add it again (deploy with lockResourceGroup true).'
+  }
+}
 
 output apiManagementProxyHostName string = apiManagement.outputs.apiManagementProxyHostName
 output apiManagementPortalHostName string = apiManagement.outputs.apiManagementDeveloperPortalHostName
