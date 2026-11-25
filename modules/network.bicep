@@ -9,6 +9,9 @@ param apiManagementSubnetIPPrefix string
 
 param vnetName string
 
+@description('Sources allowed to reach the gateway on ports 80 and 443. Empty allows the whole Internet.')
+param gatewayInboundSources array = []
+
 @description('Unique suffix for resource naming, passed from the parent deployment.')
 param uniqueSuffix string
 param tags object = {}
@@ -46,8 +49,8 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2020-05-01' = {
           protocol: 'Tcp'
           sourcePortRange: '*'
           destinationPortRange: '80'
-          // sourceAddressPrefix: 'AzureFrontDoor.Backend'
-          sourceAddressPrefix: 'Internet'
+          sourceAddressPrefix: empty(gatewayInboundSources) ? 'Internet' : null
+          sourceAddressPrefixes: empty(gatewayInboundSources) ? null : gatewayInboundSources
           destinationAddressPrefix: 'VirtualNetwork'
           access: 'Allow'
           priority: 100
@@ -60,8 +63,8 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2020-05-01' = {
           protocol: 'Tcp'
           sourcePortRange: '*'
           destinationPortRange: '443'
-          // sourceAddressPrefix: 'AzureFrontDoor.Backend'
-          sourceAddressPrefix: 'Internet'
+          sourceAddressPrefix: empty(gatewayInboundSources) ? 'Internet' : null
+          sourceAddressPrefixes: empty(gatewayInboundSources) ? null : gatewayInboundSources
           destinationAddressPrefix: 'VirtualNetwork'
           access: 'Allow'
           priority: 110

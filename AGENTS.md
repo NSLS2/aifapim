@@ -875,6 +875,14 @@ no-op cost-wise; the pinning is also harmless on those tiers.
   (`modules/log-analytics-workspace.bicep`, default `retentionInDays`; it was
   90). It holds the gateway, LLM and App Insights tables. The request-log
   prompts workspace is separate and keeps its own, much longer table retention.
+- **`restrictGatewayInbound`** (default false) lets only `allowedClientIps`
+  reach the gateway at the network level: the two client rules of the APIM
+  subnet's network security group (80 and 443) take their source from the list
+  instead of `Internet`. The ip-filter policy still refuses the rest, but the
+  traffic no longer reaches the gateway or `ApiManagementGatewayLogs`; use NSG
+  flow logs to see it. Dev first. For prod, confirm the list holds every Hermes
+  address first: a missing one is an outage for that caller. Undo: set it to
+  false and redeploy.
 
 ## Token usage analytics quirks (verified on Developer SKU)
 
