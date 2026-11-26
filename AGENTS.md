@@ -782,6 +782,7 @@ Fetch the keys with
 ```text
 aifapim.bicep                           # Orchestrator — start reading here
 aifapim.example.bicepparam              # Parameter template — copy to aifapim-<env>.bicepparam and customize
+aifapimv2-network.bicep                 # Premium v2 gateway stacks, stage 1: virtual network (plan: APIM_V2_MIGRATION.md)
 model-catalog.example.json              # Example GET /catalog body loaded by the example parameter file
 llm-token-usage-workbook.example.bicep  # Reference snapshot only — NOT deployed (canonical in aifapim-config)
 modules/
