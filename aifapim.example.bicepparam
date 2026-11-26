@@ -47,18 +47,6 @@ param gatewayKeyVaultSecretName = '<kv-secret-name-for-gateway-cert>'
 param keyVaultName          = '<your-kv-name>'
 param keyVaultResourceGroup = '<your-kv-resource-group>'
 
-// ---- Optional CA certificates added to the APIM cert store ----
-// PEM-encoded intermediate / root CA certs to add to APIM's CertificateAuthority
-// and Root stores, respectively. Both default to empty (skip).
-//
-// loadTextContent() runs at bicepparam compile time, so the file paths are
-// resolved relative to this .bicepparam file. The bundled resources/ directory
-// is gitignored aside from a .gitkeep; place your PEM files there (or any path
-// you prefer) and uncomment the matching line below.
-//
-// param intermediateCaCert = loadTextContent('resources/<your-intermediate>.pem')
-// param rootCaCert         = loadTextContent('resources/<your-root>.pem')
-
 // ---- Anthropic provider attestation ----
 // Required by Anthropic for Anthropic-format model deployments on Azure AI
 // Foundry. These values are sent to Anthropic with the deployment metadata.

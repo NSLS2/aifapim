@@ -797,9 +797,6 @@ api_definitions/                # OpenAPI specs (loaded inline via loadTextConte
                                 #   BlackForestLabs_OpenAPI.json           (POST /flux-2-pro; Black Forest Labs route)
                                 #   MAI_Image_OpenAPI.json                 (POST /images/generations and /images/edits)
                                 #   Catalog_OpenAPI.json                   (GET /catalog, /catalog/images, /catalog/embeddings and /catalog/transcriptions; static model lists)
-resources/                      # User-supplied CA PEMs loaded via loadTextContent
-                                # in the bicepparam file (intermediateCaCert /
-                                # rootCaCert params). Gitignored except .gitkeep.
 ```
 
 ## Policies and API specs are loaded inline

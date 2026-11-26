@@ -35,7 +35,3 @@ aifapim-*.bicepparam
 # Out-of-tree subscription-key tooling kept locally for personal use
 apim-subscription-keys.sh
 apim-subscriptions.bicep
-
-# CA certificate PEMs are user-supplied; directory is kept via .gitkeep.
-resources/*
-!resources/.gitkeep
