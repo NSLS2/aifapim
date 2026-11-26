@@ -42,8 +42,12 @@ service and the configuration is replicated. Reasons to move:
 - The Anthropic logging gaps (completion tokens always 0, empty model name for
   streaming, missing prompts) may be fixed on v2. Microsoft lists the Anthropic
   Messages API as supported in the v2 tiers. This is to be measured in dev.
-- Standard v2 and Premium v2 support availability zones and several units
-  (Standard v2 up to 10, Premium v2 up to 30), and an SLA.
+- Standard v2 and Premium v2 have an SLA and several units (Standard v2 up to
+  10, Premium v2 up to 30). Premium v2 supports availability zones. For
+  Standard v2 Microsoft's pages disagree (the reliability page lists zone
+  redundancy, the tier comparison does not), so zones are not relied on for
+  stage 1; the setting can only be chosen when the instance is created, so check
+  it then.
 
 What v2 does not have (Microsoft, 2026-11): multi-region, backup and restore,
 Git configuration, direct management API access, cipher configuration, the
@@ -90,11 +94,17 @@ Private endpoints in subnet `pe` -> existing Foundry accounts (East US, East US 
   caller as on Classic, and the policies need no change for `X-Forwarded-For`.
 - **No hub peering.** The networks stay stand-alone.
 - **Own host name from the start.** The gateway serves
-  `aifapimv2(-dev).nsls2.bnl.gov` as a custom domain with the Key Vault
-  certificate (system-assigned identity, trusted-service bypass). Stage 2 moves
-  that name to the Application Gateway with a DNS change, so users change their
-  host name only once. Until DNS exists, test on the default
-  `<name>.azure-api.net` address.
+  `aifapimv2(-dev).nsls2.bnl.gov` as its one custom domain (Standard v2 allows
+  only one) with the Key Vault certificate (system-assigned identity,
+  trusted-service bypass). Stage 2 moves that name to the Application Gateway
+  with a DNS change, so users change their host name only once. Until DNS
+  exists, test on the default `<name>.azure-api.net` address.
+- **The gateway is deployed in two steps.** The system-assigned identity exists
+  only once the instance does, and it needs the Key Vault Secrets User role
+  before it can read the certificate (the firewall bypass does not give that
+  authorization). So the first deployment has no custom domain, the role is
+  assigned, and a second deployment enables the domain once the role is in
+  effect, as `vaultIdentity` already does for Classic in `aifapim.bicep`.
 - **Network first.** The network (`aifapimv2-network.bicep`) is deployed on its
   own, then the gateway (`aifapimv2.bicep`).
 
@@ -209,8 +219,9 @@ Classic `apim` subnets and, since 2026-11-26, the dev `agw` subnet.
 
 - Stage 1: API Management reads its custom-domain certificate as a trusted
   service with its system-assigned identity (a control-plane call), so the
-  Standard v2 instance needs no subnet rule. Add the `int` subnet only if dev
-  cannot read the certificate.
+  Standard v2 instance needs no subnet rule, but it does need the Key Vault
+  Secrets User role, granted after the instance exists (see "Stage 1 design").
+  Add the `int` subnet only if dev cannot read the certificate.
 - Stage 2: the `agw` subnet rule (Microsoft's documented requirement for
   Application Gateway, with the `Microsoft.KeyVault` service endpoint on the
   subnet) is already in place for dev.
@@ -241,6 +252,10 @@ Dev always goes before prod.
 - [x] Certificates issued and in Key Vault
 - [x] Certificate renewal playbook (NSLS2/ansible pull request 5178)
 - [x] Key Vault firewall template deployed (NSLS2/bicep)
+- [ ] Confirm with the cloud administrators that a Standard v2 instance (an
+  address owned by API Management) is allowed under the "Deny public IPs"
+  policy, before the first gateway deployment; ask for the stage 2 exemption at
+  the same time (see "Public IP policy")
 - [ ] Explain the November Log Analytics cost in prod
 - [ ] Search the repository for Classic-only features (see "Why")
 - [ ] Decide: copy existing key values to v2, or issue new keys
@@ -264,8 +279,9 @@ Dev always goes before prod.
 - [x] Add the dev `agw` subnet to the vault firewall (kept for stage 2)
 - [ ] Redeploy the network with the `int` subnet
 - [ ] CanNotDelete lock on the resource group
-- [ ] Deploy the gateway; this also shows whether the public IP policy blocks
-  Standard v2
+- [ ] Deploy the gateway without the custom domain; this also shows whether the
+  public IP policy blocks Standard v2
+- [ ] Grant the Key Vault role, then deploy again with the custom domain
 
 ### Phase 3: test dev
 
@@ -280,6 +296,8 @@ Dev always goes before prod.
 - [ ] CPU and memory of one unit, including a repeat of the 55 requests per
   second burst
 - [ ] Request log, certificate chain, renewal, expiry alert
+- [ ] Rollback test: bind the v2 host name on Classic dev, then move DNS to
+  Classic and back
 - [ ] Decide whether the one-at-a-time deploy ordering is still needed
 
 ### Phase 4: prod
@@ -298,7 +316,12 @@ Dev always goes before prod.
 - [ ] Decide whether `aifapim.nsls2.bnl.gov` is retired or points at v2
 
 Rollback before phase 6: point DNS and Hermes back at Classic, which keeps its
-keys and configuration.
+keys and configuration. Pointing the new host name at Classic does not make it
+serve that name: Classic has no custom domain or certificate for it, so clients
+would fail TLS validation. So before users move (phase 5), Classic gets the v2
+host name as a second custom domain with the same Key Vault certificate (Classic
+Developer allows several, and keeps its existing host name), tested in dev.
+Without that, a rollback means every client changes its host name back.
 
 ### Phase 7 (later): Premium v2 behind an Application Gateway
 
@@ -406,6 +429,8 @@ the migration.
 - Key Vault trusted services and Application Gateway Key Vault certificates
   (`key-vault/general/overview-vnet-service-endpoints`,
   `application-gateway/key-vault-certs`)
+- API Management feature comparison and reliability (`api-management/`
+  `api-management-features`, `reliability/reliability-api-management`)
 - API Management managed identity and Key Vault firewall requirements
   (`api-management/api-management-howto-use-managed-service-identity`)
 - Azure Retail Prices API, East US, 2026-11-26
