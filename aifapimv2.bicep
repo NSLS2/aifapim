@@ -178,8 +178,9 @@ func allowListXml(ips array, usable bool, viaFrontDoor bool) string => viaFrontD
 var allowedIpsXml = allowListXml(allowedClientIps, true, viaFrontDoor)
 
 // The Front Door WAF refuses a list in which an address lies inside a range of the same list, so
-// bare addresses covered by a listed CIDR are left out. (Two overlapping CIDRs are not handled.)
-func wafAllowList(ips array) array => filter(ips, ip => contains(ip, '/') || length(filter(ips, c => contains(c, '/') && ipNumber(ip) >= ipNumber(parseCidr(c).network) && ipNumber(ip) <= ipNumber(parseCidr(c).broadcast))) == 0)
+// bare addresses covered by a listed CIDR are left out. (Two overlapping CIDRs are not handled.) Every
+// conversion sits in a conditional, because ARM's and() and or() do not short-circuit.
+func wafAllowList(ips array) array => filter(ips, ip => contains(ip, '/') ? true : length(filter(ips, c => contains(c, '/') ? (ipNumber(ip) >= ipNumber(parseCidr(c).network) && ipNumber(ip) <= ipNumber(parseCidr(c).broadcast)) : false)) == 0)
 
 // The APIM AOAI policy is always the multi-region variant.
 // Policies and API definition are loaded from the local repository so deployments do not depend on external URLs.
