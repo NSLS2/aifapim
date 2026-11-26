@@ -127,17 +127,40 @@ param foundryAccounts array
 @description('Prefix of the API Management instance name, which is <prefix>-<unique>. A dev prefix with dev in it gives a default host name that the dev smoke test accepts.')
 param apimNamePrefix string = 'apim'
 
+@description('Whether the gateway answers on its public address. Set Disabled once the Front Door private endpoint connection is approved: the client check reads X-Azure-SocketIP, which anyone could set on a public request.')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param publicNetworkAccess string = 'Enabled'
+
 @description('Model deployments of each region, as in the Classic settings: the first list is the secondary region (eastus), the second the primary (eastus2). Only the names are used: they decide which models fail over, and which start on the secondary.')
 param modelDeployments array
 
 
-// Render the IP allow-list entries as APIM ip-filter child elements. CIDR
-// entries become <address-range from=... to=.../> using parseCidr's
-// firstUsable/lastUsable; bare addresses become <address>...</address>.
-var allowedIpsXml = join(map(allowedClientIps, ip => contains(ip, '/')
-  ? '<address-range from="${parseCidr(ip).firstUsable}" to="${parseCidr(ip).lastUsable}" />'
-  : '<address>${ip}</address>'
-), '\n              ')
+// Client address check. Behind Front Door the gateway sees an internal address, so the ip-filter of
+// the Classic policies would refuse everyone. The check reads X-Azure-SocketIP instead: the address
+// Front Door saw on its connection. Front Door overwrites that header when a client sends it
+// (tested), unlike X-Forwarded-For and X-Azure-ClientIP, which follow whatever a client puts first
+// in X-Forwarded-For, and X-Forwarded-For also gets two more entries from the hops after Front Door.
+// The header can be forged on a public request, so the gateway must have publicNetworkAccess
+// Disabled. With no usable header the request is refused.
+//
+// The policy files keep their <ip-filter> element for Classic; here its tags are removed and the
+// sentinel inside it becomes the check. A CIDR entry in the global list covers the usable
+// addresses, in a product list the whole range (the NAT pool, all 16 addresses), as in aifapim.bicep.
+func ipNumber(ip string) int => int(split(ip, '.')[0]) * 16777216 + int(split(ip, '.')[1]) * 65536 + int(split(ip, '.')[2]) * 256 + int(split(ip, '.')[3])
+
+func clientRangeNumbers(ips array, usable bool) string => join(map(ips, ip => contains(ip, '/')
+  ? '${ipNumber(usable ? parseCidr(ip).firstUsable : parseCidr(ip).network)}L, ${ipNumber(usable ? parseCidr(ip).lastUsable : parseCidr(ip).broadcast)}L'
+  : '${ipNumber(ip)}L, ${ipNumber(ip)}L'
+), ', ')
+
+func clientCheckXml(numbers string) string => '<choose><when condition="@{ var ip = context.Request.Headers.GetValueOrDefault(&quot;X-Azure-SocketIP&quot;, &quot;&quot;).Trim(); if (!Regex.IsMatch(ip, &quot;^[0-9]{1,3}([.][0-9]{1,3}){3}$&quot;)) { return true; } var o = ip.Split(\'.\'); var n = Convert.ToInt64(o[0]) * 16777216L + Convert.ToInt64(o[1]) * 65536L + Convert.ToInt64(o[2]) * 256L + Convert.ToInt64(o[3]); var r = new long[] { ${numbers} }; for (var i = 0; i &lt; r.Length; i += 2) { if (n >= r[i] &amp;&amp; n &lt;= r[i + 1]) { return false; } } return true; }"><return-response><set-status code="403" reason="Forbidden" /></return-response></when></choose>'
+
+func dropIpFilter(xml string) string => replace(replace(xml, '<ip-filter action="allow">', ''), '</ip-filter>', '')
+
+var allowedIpsXml = clientCheckXml(clientRangeNumbers(allowedClientIps, true))
 
 // The APIM AOAI policy is always the multi-region variant.
 // Policies and API definition are loaded from the local repository so deployments do not depend on external URLs.
@@ -145,7 +168,7 @@ var allowedIpsXml = join(map(allowedClientIps, ip => contains(ip, '/')
 //   __BACKEND_TIMEOUT__    -> backendTimeoutSeconds (forward-request timeout)
 //   __IMAGE_REQUESTS_PER_MINUTE__ -> imageRequestsPerMinute (per-caller image limit)
 //   __AUDIO_REQUESTS_PER_MINUTE__ -> audioRequestsPerMinute (per-caller transcription limit, AOAI policy)
-//   __ALLOWED_CLIENT_IPS__ -> allowedIpsXml (ip-filter allow-list built from allowedClientIps)
+//   __ALLOWED_CLIENT_IPS__ -> allowedIpsXml (client address check built from allowedClientIps)
 //   __METRIC_NAMESPACE__   -> apimProductName (App Insights custom-metric namespace)
 //   __SECONDARY_MODELS__   -> secondaryModelList (models deployed in the secondary region;
 //                             the policies fail over only for these)
@@ -165,7 +188,7 @@ var requestLogMarker = '<!-- __REQUEST_LOG__ -->'
 // usageTrace is true.
 var usageTraceXml = usageTrace ? loadTextContent('apim_policies/UsageTrace_Fragment.xml') : ''
 var inboundLogXml = usageTraceXml
-var openApiXml = replace(replace(replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
+var openApiXml = replace(replace(replace(replace(replace(replace(replace(replace(dropIpFilter(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml')), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
 
 // Anthropic API policy (multi-region retry variant).
 // The claude-auto block (apim_policies/ClaudeAuto_Fragment.xml) replaces the
@@ -174,16 +197,16 @@ var openApiXml = replace(replace(replace(replace(replace(replace(replace(replace
 // are filled in here and the metric namespace is filled in afterwards.
 var claudeAutoMarker = '<!-- __CLAUDE_AUTO__ -->'
 var claudeAutoXml = empty(claudeAuto) ? '' : replace(replace(replace(replace(replace(loadTextContent('apim_policies/ClaudeAuto_Fragment.xml'), '__CLAUDE_AUTO_URL__', '${anthropicServiceUrlPrimary}/v1/messages'), '__CLAUDE_AUTO_CLASSIFIER__', claudeAuto.classifierModel), '__CLAUDE_AUTO_SIMPLE__', claudeAuto.simpleModel), '__CLAUDE_AUTO_MEDIUM__', claudeAuto.mediumModel), '__CLAUDE_AUTO_COMPLEX__', claudeAuto.complexModel)
-var anthropicApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), claudeAutoMarker, claudeAutoXml), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml)
+var anthropicApiXml = replace(replace(replace(replace(replace(replace(dropIpFilter(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml')), claudeAutoMarker, claudeAutoXml), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml)
 
 // OpenAI v1 Messages API policy (multi-region retry variant).
-var openaiV1MessagesApiXml = replace(replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
+var openaiV1MessagesApiXml = replace(replace(replace(replace(replace(replace(replace(dropIpFilter(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml')), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
 
 // Black Forest Labs API policy (multi-region retry variant).
-var bflApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/BlackForestLabs_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+var bflApiXml = replace(replace(replace(replace(replace(replace(dropIpFilter(loadTextContent('apim_policies/BlackForestLabs_Policy-Managed_Identity_with_Retry_MultiRegion.xml')), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
 
 // MAI image API policy (one backend, no failover: the models are in the secondary region only).
-var maiApiXml = replace(replace(replace(replace(replace(loadTextContent('apim_policies/MAI_Image_Policy-Managed_Identity_with_Retry.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+var maiApiXml = replace(replace(replace(replace(replace(dropIpFilter(loadTextContent('apim_policies/MAI_Image_Policy-Managed_Identity_with_Retry.xml')), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
 
 // Catalog API policy: static return-response, no backend.
 // Sentinels replaced: __ALLOWED_CLIENT_IPS__ (IP filter), __CATALOG_JSON__ (chat model list
@@ -197,7 +220,7 @@ var embeddingCatalogJsonXml = replace(replace(replace(embeddingCatalogJson, '&',
 var transcriptionCatalogJsonXml = replace(replace(replace(transcriptionCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
 var routerCatalogJsonXml = replace(replace(replace(routerCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
 var imageCatalogJsonXml = replace(replace(replace(imageCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
-var catalogApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/Catalog_Policy.xml'), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__ROUTER_CATALOG_JSON__', routerCatalogJsonXml), '__TRANSCRIPTION_CATALOG_JSON__', transcriptionCatalogJsonXml), '__EMBEDDING_CATALOG_JSON__', embeddingCatalogJsonXml), '__IMAGE_CATALOG_JSON__', imageCatalogJsonXml), '__CATALOG_JSON__', catalogJsonXml)
+var catalogApiXml = replace(replace(replace(replace(replace(replace(dropIpFilter(loadTextContent('apim_policies/Catalog_Policy.xml')), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__ROUTER_CATALOG_JSON__', routerCatalogJsonXml), '__TRANSCRIPTION_CATALOG_JSON__', transcriptionCatalogJsonXml), '__EMBEDDING_CATALOG_JSON__', embeddingCatalogJsonXml), '__IMAGE_CATALOG_JSON__', imageCatalogJsonXml), '__CATALOG_JSON__', catalogJsonXml)
 
 // Azure OpenAI data-plane inference spec is pinned locally so deployments are
 // deterministic and do not depend on github.com being reachable at deploy time.
@@ -245,9 +268,9 @@ var catalogProductDescription = 'Read-only product scoped to GET /catalog only, 
 // are escaped.
 func xmlEscape(value string) string => replace(replace(replace(replace(replace(value, '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '"', '&quot;'), '\'', '&apos;')
 
-func productIpFilterXml(ips array) string => empty(ips) ? '' : '<ip-filter action="allow">\n            ${join(map(ips, ip => contains(ip, '/') ? '<address-range from="${parseCidr(ip).network}" to="${parseCidr(ip).broadcast}" />' : '<address>${ip}</address>'), '\n            ')}\n        </ip-filter>'
+func productIpFilterXml(ips array) string => empty(ips) ? '' : clientCheckXml(clientRangeNumbers(ips, false))
 
-var productIpPolicyTemplate = loadTextContent('apim_policies/Product_IpRestricted_Policy.xml')
+var productIpPolicyTemplate = dropIpFilter(loadTextContent('apim_policies/Product_IpRestricted_Policy.xml'))
 var productEntraAuthPolicyTemplate = loadTextContent('apim_policies/Product_EntraAuth_Policy.xml')
 
 // The open product needs no subscription key, so its policy is the only access
@@ -276,7 +299,7 @@ var serviceProductsResolved = map(serviceProducts, p => {
         : productDenyAllPolicyXml)
     : !empty(p.?entraAuth ?? {})
     ? replace(replace(replace(replace(productEntraAuthPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_ROLE__', xmlEscape(p.entraAuth.role))
-    : empty(p.?allowedClientIps ?? []) ? '' : replace(productIpPolicyTemplate, '__PRODUCT_ALLOWED_IPS__', join(map(p.allowedClientIps, ip => contains(ip, '/') ? '<address-range from="${parseCidr(ip).network}" to="${parseCidr(ip).broadcast}" />' : '<address>${ip}</address>'), '\n            '))
+    : empty(p.?allowedClientIps ?? []) ? '' : replace(productIpPolicyTemplate, '__PRODUCT_ALLOWED_IPS__', clientCheckXml(clientRangeNumbers(p.allowedClientIps, false)))
 })
 
 var unique = uniqueString(resourceGroup().id, subscription().id)
@@ -383,6 +406,7 @@ module apiManagement 'modules/api-management-v2.bicep' = {
     publisherName: apiManagementPublisherName
     publisherEmail: apiManagementPublisherEmail
     skuCount: apiManagementSkuCount
+    publicNetworkAccess: publicNetworkAccess
     subnetResourceId: integrationSubnetId
     aiName: applicationInsightsName
     gatewayHostName: apimGatewayHostName

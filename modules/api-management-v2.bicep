@@ -28,6 +28,13 @@ param skuName string = 'StandardV2'
 @description('The number of units.')
 param skuCount int = 1
 
+@description('Whether the gateway answers on its public address. Disable it only once a private endpoint connection exists (Front Door Private Link): APIM refuses to disable it before then, and a deployment that leaves it out resets it to Enabled.')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param publicNetworkAccess string = 'Enabled'
+
 @description('Resource ID of the subnet for outbound virtual network integration (delegated to Microsoft.Web/serverFarms).')
 param subnetResourceId string
 
@@ -94,6 +101,7 @@ resource apiManagementService 'Microsoft.ApiManagement/service@2024-05-01' = {
       subnetResourceId: subnetResourceId
     }
     hostnameConfigurations: hostnameConfigurations
+    publicNetworkAccess: publicNetworkAccess
     developerPortalStatus: 'Disabled'
     apiVersionConstraint: {
       minApiVersion: '2021-08-01'
