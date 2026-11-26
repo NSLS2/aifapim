@@ -62,13 +62,6 @@ param keyVaultResourceGroup string = ''
 @description('Key Vault secret name for the developer portal TLS certificate.')
 param portalKeyVaultSecretName string = ''
 
-@description('Which APIM managed identity reads the custom-domain certificates from Key Vault: "user" (the user-assigned identity, as before) or "system" (the system-assigned identity, which a Key Vault firewall requires). The system-assigned identity gets the Key Vault Secrets User role on every deployment, after APIM exists, so move an existing instance in two deployments: first "user", which only adds the role, then "system". A new instance cannot read the certificate with "system" on its first deployment.')
-@allowed([
-  'user'
-  'system'
-])
-param vaultIdentity string = 'user'
-
 @description('Put a CanNotDelete lock on this resource group. Updates, key regeneration and deployments still work; deleting anything in the group (a subscription, a named value, a model deployment) needs the lock removed first.')
 param lockResourceGroup bool = false
 
@@ -565,26 +558,15 @@ module network 'modules/network.bicep' = {
   }
 }
 
-// User-assigned managed identity for APIM to access Key Vault at creation time
+// User-assigned managed identity. It held the Key Vault role that read the custom-domain
+// certificates until the gateways moved to their system-assigned identity (2026-11-25); the
+// role was removed on 2026-11-26 and it now holds no role. Detach and delete it in a later
+// change (APIM needs a service update to drop it).
 resource apimIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (!empty(keyVaultName)) {
   name: 'id-${apiManagementServiceName}'
   location: location
   tags: tags
 }
-
-// Grant the user-assigned identity Key Vault Secrets User role BEFORE APIM deployment
-module kvAccess 'modules/keyvault-role.bicep' = if (!empty(keyVaultName)) {
-  name: 'kvSecretUserForApim'
-  scope: resourceGroup(keyVaultResourceGroup)
-  params: {
-    keyVaultName: keyVaultName
-    roleName: guid(subscription().id, keyVaultName, apiManagementServiceName, 'KeyVaultSecretUser', 'vault-scope')
-    principalId: apimIdentity!.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
-  }
-}
-
 
 module apiManagement 'modules/api-management-private.bicep' = {
   name: 'api-management'
@@ -607,7 +589,6 @@ module apiManagement 'modules/api-management-private.bicep' = {
     intermediateCaCert: intermediateCaCert
     rootCaCert: rootCaCert
     userAssignedIdentityId: !empty(keyVaultName) ? apimIdentity!.id : ''
-    userAssignedIdentityClientId: !empty(keyVaultName) && vaultIdentity == 'user' ? apimIdentity!.properties.clientId : ''
     disableDeveloperPortal: disableDeveloperPortal
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
     tags: tags
@@ -615,12 +596,13 @@ module apiManagement 'modules/api-management-private.bicep' = {
   dependsOn: [
     applicationInsights
     eventHub
-    kvAccess
   ]
 }
 
-// The system-assigned identity exists only once APIM does, so this role is written
-// after the APIM module. See vaultIdentity.
+// The gateway reads its custom-domain certificates from Key Vault with its system-assigned
+// identity (a Key Vault firewall needs that). The identity exists only once APIM does, so this
+// role is written after the APIM module: a new instance cannot start with custom hostnames.
+// Deploy it without apimGatewayHostName first, then add the hostname.
 module kvAccessSystem 'modules/keyvault-role.bicep' = if (!empty(keyVaultName)) {
   name: 'kvSecretUserForApimSystem'
   scope: resourceGroup(keyVaultResourceGroup)

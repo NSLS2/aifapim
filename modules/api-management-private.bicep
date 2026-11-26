@@ -50,9 +50,6 @@ param rootCaCert string = ''
 @description('Resource ID of a user-assigned managed identity for Key Vault access. Leave empty if not using custom domains.')
 param userAssignedIdentityId string = ''
 
-@description('Client ID of the user-assigned managed identity that reads the custom-domain certificates from Key Vault. Leave empty to use the system-assigned identity, which a Key Vault firewall requires.')
-param userAssignedIdentityClientId string = ''
-
 @description('Disable the developer portal entirely.')
 param disableDeveloperPortal bool = true
 
@@ -80,7 +77,6 @@ var gatewayHostnameConfig = enableCustomDomains ? [
     negotiateClientCertificate: false
     defaultSslBinding: true
     keyVaultId: '${keyVaultBaseUrl}/secrets/${gatewayKeyVaultSecretName}'
-    identityClientId: empty(userAssignedIdentityClientId) ? null : userAssignedIdentityClientId
   }
 ] : []
 
@@ -90,7 +86,6 @@ var portalHostnameConfig = enablePortalDomain ? [
     hostName: portalHostName
     negotiateClientCertificate: false
     keyVaultId: '${keyVaultBaseUrl}/secrets/${portalKeyVaultSecretName}'
-    identityClientId: empty(userAssignedIdentityClientId) ? null : userAssignedIdentityClientId
   }
 ] : []
 

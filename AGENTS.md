@@ -913,13 +913,17 @@ no-op cost-wise; the pinning is also harmless on those tiers.
   verified before the first dev deploy:** that APIM keeps
   `{{ai-logger-identity}}` as it is and writes no new `Logger-Credentials--*`;
   deploy twice and count.
-- **`vaultIdentity`** chooses which APIM identity reads the custom-domain
-  certificates from Key Vault. A Key Vault firewall needs `system`. The
-  system-assigned identity gets the Key Vault Secrets User role on every
-  deployment, after APIM exists (`kvAccessSystem`), so an existing instance
-  moves in two deployments: first `user` (adds the role only), then `system`
-  (the hostnames read the certificate with the system-assigned identity). A new
-  instance cannot start on `system`.
+- **The hostnames read their certificates from Key Vault with the
+  system-assigned identity only** (a Key Vault firewall needs it, and the
+  certificate fetch arrives from an Azure platform address, so the firewall
+  admits it as a trusted service). The role is written after APIM exists
+  (`kvAccessSystem`), so a **new** instance cannot start with custom hostnames:
+  deploy it without `apimGatewayHostName` first, then add the hostname. The
+  user-assigned identity (`id-<apim>`) no longer holds any role (the
+  `vaultIdentity` switch and its role assignment were removed 2026-11-26, after
+  the audit log showed no read by it since the switch); it is still attached to
+  APIM. Detaching and deleting it needs a service update, so do it in a
+  separate change.
 - **`lockResourceGroup`** puts a CanNotDelete lock on the resource group (prod
   only). Updates, key regeneration and deployments work; deleting anything in
   the group (a subscription, a named value, a model deployment, a blob
