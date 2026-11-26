@@ -943,6 +943,15 @@ no-op cost-wise; the pinning is also harmless on those tiers.
   inside a range. Keep it equal to the callers in `allowedClientIps`. Dev
   first. For prod, confirm the list holds every Hermes address first: a missing
   one is an outage for that caller. Undo: set it to `[]` and redeploy.
+- **Gateway certificates** (re-issued 2026-11-26) come from the
+  `ansible-aifapim-gateway-certs` playbook, not from this repo: four vault
+  certificates (`aifapim`, `aifapim-dev`, `aifapimv2`, `aifapimv2-dev`, the
+  first label of the host), ECDSA P-256 on the SSL.com ECC chain. The Classic
+  gateways read the secret without a version, so a new version needs no deploy,
+  but APIM picks it up on its own schedule (no SLA on Developer); **Sync
+  certificates** in the portal does it at once as a service update of up to 45
+  minutes. Old certificates were not revoked. Details in
+  `~/Projects/docs/apim-advisory-response.md`.
 
 ## Token usage analytics quirks (verified on Developer SKU)
 
