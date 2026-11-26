@@ -31,6 +31,7 @@ request as work lands.
 | Gateway template (`aifapimv2.bicep`, Standard v2) | Written; not deployed. No request body log or Event Hub yet |
 | DNS records | Waiting; test on the default `azure-api.net` name |
 | Public IP policy | Not a blocker for stage 1; blocks stage 2 |
+| Agent client in the logs and token metrics | Done on Classic (staged on `main`, not yet committed); carries over by merge; not tried on v2 |
 
 ## Why, and what Microsoft gives us
 
@@ -143,6 +144,7 @@ deployed (reserved) in the dev network.
 | Gateway to storage, Event Hub | Trusted-service bypass or private endpoint | Private endpoints (trusted-service access for the gateway data plane ended March 2026) |
 | Deploy ordering | One-at-a-time writes (Developer "ServiceLocked race") | Kept first, relax after dev shows it is not needed |
 | Subscriptions | People, services, beamlines, catalog poller | Recreated with the same key values (companion repo) |
+| Which tool called | Staged on Classic `main`: a policy variable `agentClient` (the `X-Agent-Client` header if it is one of `opencode`, `opencode2`, `claude`, `codex`, else matched from `User-Agent`, else `other`), logged with `User-Agent` and added to the usage trace and token metrics. Statistics only: a client sets both headers itself | Same files: the v2 template renders the same policies and `modules/api.bicep`, so it arrives with a merge of `main` once the Classic change is committed |
 
 ## Usage and cost
 
@@ -279,6 +281,10 @@ Dev always goes before prod.
 - [ ] Settings for the prod gateway
 - [ ] Key copy script (same key values) and the scripts that name the APIM
   resource (companion)
+- [ ] Agent client tracking: merge `main` once the Classic change is committed
+  (policies, usage trace fragment, `modules/api.bicep`, policy test). Until then
+  the staged patch applies to this branch as is; the v2 copies of those files
+  match Classic `HEAD`, apart from the API versions in `modules/api.bicep`
 
 ### Phase 2: deploy dev
 
@@ -306,6 +312,16 @@ Dev always goes before prod.
 - [ ] Rollback test: bind the v2 host name on Classic dev, then move DNS to
   Classic and back
 - [ ] Decide whether the one-at-a-time deploy ordering is still needed
+- [ ] Agent client: one call per tool (opencode, opencode 2, Claude Code, Codex)
+  through the dev gateway, then read `Request-User-Agent` and
+  `Request-X-Agent-Client` back from `AppRequests` and fix the `User-Agent`
+  patterns in all five policies together (the patterns are from memory)
+- [ ] Token metrics still arrive in `AppMetrics` with an `Agent Client` column.
+  The policies carry 8 dimension names, 5 with values, against a documented
+  limit of 5 custom dimensions per policy; if the metrics stop, drop one
+  dimension (the traces and `AppRequests` still carry the client)
+- [ ] The two headers reach the gateway unchanged when the gateway is behind
+  Front Door (checked once the Front Door design is built)
 
 ### Phase 4: prod
 
@@ -410,6 +426,10 @@ Governance and recovery:
 - What the platform's default TLS settings accept (phase 3 scan).
 - The effect of deny-Internet outbound on the integrated instance (phase 3).
 - Whether the PFX in Key Vault serves the intermediate certificates.
+- Whether the token metrics keep all their dimensions on v2: the policies now
+  name 8, 5 with values, and the documented limit is 5 custom dimensions per
+  policy (see phase 3). Any change to the caller-address dimension for the
+  Front Door design should replace the existing one, not add another.
 - Whether a second Standard v2 unit is billed at the secondary-unit rate.
 - For stage 2: a web application firewall on the Application Gateway. Hermes is
   the WAF for callers that go through it, but callers from the NAT pool connect
