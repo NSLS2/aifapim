@@ -1,6 +1,9 @@
 @description('Name of the existing Key Vault to grant access to.')
 param keyVaultName string
 
+@description('Name of the secret in the vault to scope the role to.')
+param secretName string
+
 @description('Role assignment name (GUID).')
 param roleName string
 
@@ -17,9 +20,14 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
 
+resource secret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: keyVault
+  name: secretName
+}
+
 resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: roleName
-  scope: keyVault
+  scope: secret
   properties: {
     principalId: principalId
     principalType: principalType

@@ -581,7 +581,8 @@ module apiManagement 'modules/api-management-private.bicep' = {
 }
 
 // The gateway reads its custom-domain certificates from Key Vault with its system-assigned
-// identity (a Key Vault firewall needs that). The identity exists only once APIM does, so this
+// identity (a Key Vault firewall needs that). The role is scoped to the one secret, so a gateway
+// cannot read another gateway's certificate. The identity exists only once APIM does, so this
 // role is written after the APIM module: a new instance cannot start with custom hostnames.
 // Deploy it without apimGatewayHostName first, then add the hostname.
 module kvAccessSystem 'modules/keyvault-role.bicep' = if (!empty(keyVaultName)) {
@@ -589,7 +590,8 @@ module kvAccessSystem 'modules/keyvault-role.bicep' = if (!empty(keyVaultName)) 
   scope: resourceGroup(keyVaultResourceGroup)
   params: {
     keyVaultName: keyVaultName
-    roleName: guid(subscription().id, keyVaultName, apiManagementServiceName, 'KeyVaultSecretUser', 'system-assigned')
+    secretName: gatewayKeyVaultSecretName
+    roleName: guid(subscription().id, keyVaultName, apiManagementServiceName, 'KeyVaultSecretUser', gatewayKeyVaultSecretName)
     principalId: apiManagement.outputs.apiManagementIdentityPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User

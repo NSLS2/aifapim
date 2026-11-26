@@ -913,7 +913,13 @@ no-op cost-wise; the pinning is also harmless on those tiers.
 - **The hostnames read their certificates from Key Vault with the
   system-assigned identity only** (a Key Vault firewall needs it, and the
   certificate fetch arrives from an Azure platform address, so the firewall
-  admits it as a trusted service). The role is written after APIM exists
+  admits it as a trusted service). The role is scoped to the one secret
+  (`gatewayKeyVaultSecretName`, role name GUID includes it), so a gateway cannot
+  read another gateway's certificate; verified 2026-11-26 on dev and prod (a
+  `SecretGet` 200 more than 15 minutes after the vault-wide role was deleted;
+  Key Vault caches role changes for up to about 10 minutes). Changing a role's
+  scope makes a new assignment and leaves the old one: delete it by hand. The
+  role is written after APIM exists
   (`kvAccessSystem`), so a **new** instance cannot start with custom hostnames:
   deploy it without `apimGatewayHostName` first, then add the hostname. The
   user-assigned identity (`id-<apim>`) was removed in 2026-11 (its vault role
