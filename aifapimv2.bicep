@@ -359,6 +359,9 @@ module llmLatencyAlerts 'modules/llm-latency-alerts.bicep' = {
     workspaceResourceId: logAnalyticsWorkspace.outputs.id
     actionGroupId: applicationInsights.outputs.actionGroupId
     uniqueSuffix: unique
+    // The table of the gateway logs does not exist in a new workspace until the gateway has
+    // sent its first logs, and the rules cannot be created while it is missing.
+    skipQueryValidation: true
     tags: tags
   }
 }

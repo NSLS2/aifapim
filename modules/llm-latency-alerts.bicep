@@ -41,6 +41,9 @@ param evaluationFrequency string = 'PT5M'
 @description('Alert severity (0 = Critical, 2 = Warning, 4 = Verbose).')
 param severity int = 2
 
+@description('Skip the validation of the alert queries when the rules are created. A new workspace has no ApiManagementGatewayLogs table until the gateway has sent its first logs, and the validation fails without it. Set true for the first deployment of a new stack.')
+param skipQueryValidation bool = false
+
 @description('Tags to apply to alert resources.')
 param tags object = {}
 
@@ -57,6 +60,7 @@ resource apimOverheadAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-pr
     severity: severity
     evaluationFrequency: evaluationFrequency
     windowSize: windowSize
+    skipQueryValidation: skipQueryValidation
     scopes: [
       workspaceResourceId
     ]
@@ -105,6 +109,7 @@ resource llmLatencyAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-prev
     severity: severity
     evaluationFrequency: evaluationFrequency
     windowSize: windowSize
+    skipQueryValidation: skipQueryValidation
     scopes: [
       workspaceResourceId
     ]
