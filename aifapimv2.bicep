@@ -104,6 +104,9 @@ param embeddingCatalogJson string = '[]'
 @description('Router catalog JSON array (id/name/provider/context/output/mode/models/routes/residency per model router). Populated in the bicepparam file via loadTextContent(\'./router-catalog.json\'). Baked into the GET /catalog/routers return-response policy at deploy time. Kept apart from catalogJson because a router has format OpenAI but serves Chat Completions only, and chat clients built from catalogJson use the Responses API.')
 param routerCatalogJson string = '[]'
 
+@description('Speech-to-text (audio transcription) model catalog JSON array (id/name/provider/max_file_mb/route/residency/timestamps/speaker_labels per model). Populated in the bicepparam file via loadTextContent(\'./transcription-catalog.json\'). Baked into the GET /catalog/transcriptions return-response policy at deploy time.')
+param transcriptionCatalogJson string = '[]'
+
 @description('Write one Application Insights trace per request to the five inference APIs that names the caller (the subscription of a key, or the object id of a token caller), with the request id, API, product and model. Join it to ApiManagementGatewayLlmLog on CorrelationId for tokens per caller. Needed for keyless callers of the open product, which have no subscription to name them in the gateway log; harmless for keyed callers.')
 param usageTrace bool = false
 
@@ -124,7 +127,7 @@ param foundryAccounts array
 @description('Prefix of the API Management instance name, which is <prefix>-<unique>. A dev prefix with dev in it gives a default host name that the dev smoke test accepts.')
 param apimNamePrefix string = 'apim'
 
-@description('Model deployments of each region, as in the Classic settings. Only the names of the first entry (the secondary region) are used, to fail over only for models it has.')
+@description('Model deployments of each region, as in the Classic settings: the first list is the secondary region (eastus), the second the primary (eastus2). Only the names are used: they decide which models fail over, and which start on the secondary.')
 param modelDeployments array
 
 
@@ -146,8 +149,12 @@ var allowedIpsXml = join(map(allowedClientIps, ip => contains(ip, '/')
 //   __METRIC_NAMESPACE__   -> apimProductName (App Insights custom-metric namespace)
 //   __SECONDARY_MODELS__   -> secondaryModelList (models deployed in the secondary region;
 //                             the policies fail over only for these)
+//   __SECONDARY_ONLY_MODELS__ -> secondaryOnlyModelList (models in the first region only; the two
+//                             OpenAI policies start those requests on the secondary backend)
 //   <!-- __REQUEST_LOG__ --> -> inboundLogXml (usage trace and request body log blocks, or nothing)
 var secondaryModelList = '|${join(map(modelDeployments[0], d => d.name), '|')}|'
+var primaryModelNames = length(modelDeployments) > 1 ? map(modelDeployments[1], d => d.name) : []
+var secondaryOnlyModelList = '|${join(map(filter(modelDeployments[0], d => !contains(primaryModelNames, d.name)), d => d.name), '|')}|'
 
 // The inference policies carry the marker comment below in <inbound>. It is replaced by the
 // usage trace when usageTrace is true, and by nothing otherwise. The request body log of
@@ -158,7 +165,7 @@ var requestLogMarker = '<!-- __REQUEST_LOG__ -->'
 // usageTrace is true.
 var usageTraceXml = usageTrace ? loadTextContent('apim_policies/UsageTrace_Fragment.xml') : ''
 var inboundLogXml = usageTraceXml
-var openApiXml = replace(replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute))
+var openApiXml = replace(replace(replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
 
 // Anthropic API policy (multi-region retry variant).
 // The claude-auto block (apim_policies/ClaudeAuto_Fragment.xml) replaces the
@@ -170,7 +177,7 @@ var claudeAutoXml = empty(claudeAuto) ? '' : replace(replace(replace(replace(rep
 var anthropicApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), claudeAutoMarker, claudeAutoXml), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml)
 
 // OpenAI v1 Messages API policy (multi-region retry variant).
-var openaiV1MessagesApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+var openaiV1MessagesApiXml = replace(replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
 
 // Black Forest Labs API policy (multi-region retry variant).
 var bflApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/BlackForestLabs_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
@@ -181,14 +188,16 @@ var maiApiXml = replace(replace(replace(replace(replace(loadTextContent('apim_po
 // Catalog API policy: static return-response, no backend.
 // Sentinels replaced: __ALLOWED_CLIENT_IPS__ (IP filter), __CATALOG_JSON__ (chat model list
 // body), __IMAGE_CATALOG_JSON__ (image model list body), __EMBEDDING_CATALOG_JSON__
-// (embedding model list body) and __ROUTER_CATALOG_JSON__ (model router list body).
+// (embedding model list body), __TRANSCRIPTION_CATALOG_JSON__ (speech-to-text model list
+// body) and __ROUTER_CATALOG_JSON__ (model router list body).
 // The JSON is XML-escaped (& first) because it lands in element text; APIM
 // unescapes it, so the response body is the original JSON.
 var catalogJsonXml = replace(replace(replace(catalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
 var embeddingCatalogJsonXml = replace(replace(replace(embeddingCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
+var transcriptionCatalogJsonXml = replace(replace(replace(transcriptionCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
 var routerCatalogJsonXml = replace(replace(replace(routerCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
 var imageCatalogJsonXml = replace(replace(replace(imageCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
-var catalogApiXml = replace(replace(replace(replace(replace(loadTextContent('apim_policies/Catalog_Policy.xml'), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__ROUTER_CATALOG_JSON__', routerCatalogJsonXml), '__EMBEDDING_CATALOG_JSON__', embeddingCatalogJsonXml), '__IMAGE_CATALOG_JSON__', imageCatalogJsonXml), '__CATALOG_JSON__', catalogJsonXml)
+var catalogApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/Catalog_Policy.xml'), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__ROUTER_CATALOG_JSON__', routerCatalogJsonXml), '__TRANSCRIPTION_CATALOG_JSON__', transcriptionCatalogJsonXml), '__EMBEDDING_CATALOG_JSON__', embeddingCatalogJsonXml), '__IMAGE_CATALOG_JSON__', imageCatalogJsonXml), '__CATALOG_JSON__', catalogJsonXml)
 
 // Azure OpenAI data-plane inference spec is pinned locally so deployments are
 // deterministic and do not depend on github.com being reachable at deploy time.
