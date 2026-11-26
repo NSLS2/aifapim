@@ -417,6 +417,9 @@ resource subnetResources 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' 
         }
       ]
       defaultOutboundAccess: subnet.defaultOutboundAccess
+      // As deployed, and as in modules/vnet.bicep: network security groups do not apply to
+      // private endpoint traffic. Set explicitly, so a redeployment does not flip it.
+      privateEndpointNetworkPolicies: 'Disabled'
     }
   }
 ]
