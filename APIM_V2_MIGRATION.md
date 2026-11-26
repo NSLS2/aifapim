@@ -363,8 +363,10 @@ consider v2. Items are checked in dev (phase 3) and again in prod.
 
 Decided:
 
-- [ ] Built-in all-access subscription (`master`) turned off: suspended in the
-  template, or removed if APIM allows it; its state is checked in dev.
+- [ ] Built-in all-access subscription (`master`) suspended by hand after the
+  first deployment (a template cannot: APIM answers a write with "Can't modify
+  global subscription"); its state is checked in dev. Its keys skip every
+  product policy, including the Entra token check of the agent products.
 - [ ] `allowTracing: false` on every subscription, in the gateway template and
   in the key tooling of the companion repository.
 

@@ -460,19 +460,10 @@ resource apimServiceRef 'Microsoft.ApiManagement/service@2024-05-01' existing = 
   ]
 }
 
-// The built-in all-access subscription is scoped to the whole service, so its keys skip every
-// product policy, including the Entra token check of the agent products. Nothing uses it. APIM
-// accepts only a relative scope here, so it is written as '/apis' (all APIs) while suspended.
-resource builtInSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
-  parent: apimServiceRef
-  name: 'master'
-  properties: {
-    displayName: 'Built-in all-access subscription'
-    scope: '/apis'
-    state: 'suspended'
-    allowTracing: false
-  }
-}
+// The built-in all-access subscription (master) is scoped to the whole service, so its keys skip
+// every product policy, including the Entra token check of the agent products. A template cannot
+// suspend it: APIM answers a write with "Can't modify global subscription". It is suspended by
+// hand after the first deployment (docs/apim-v2-migration.md in aifapim-config).
 
 // The system-assigned identity exists only once APIM does, so this role is written after the
 // APIM module. The custom domain needs it: see the header.
