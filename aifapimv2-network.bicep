@@ -8,7 +8,8 @@
 //
 // Subnets:
 //   apim  API Management Premium v2 (injection). Delegated to the service, dedicated to
-//         one instance. The only inbound traffic allowed is HTTPS from the agw subnet.
+//         one instance. Apart from health probes and its own units, the only inbound
+//         traffic allowed is HTTPS from the agw subnet.
 //   agw   Application Gateway, the only public entry. The Microsoft.KeyVault service
 //         endpoint lets it read its certificate from the firewalled Key Vault (add this
 //         subnet to the vault, see the bicep repository, azure/infra-certificates).
@@ -91,6 +92,21 @@ resource apimNsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
           destinationAddressPrefix: apimSubnetPrefix
           access: 'Allow'
           priority: 200
+          direction: 'Inbound'
+        }
+      }
+      {
+        // The VirtualNetwork tag includes 168.63.129.16, where the health probes come
+        // from, so the deny below would override the default probe rule.
+        name: 'Allow_Inbound_Azure_Load_Balancer'
+        properties: {
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          destinationAddressPrefix: '*'
+          access: 'Allow'
+          priority: 210
           direction: 'Inbound'
         }
       }
@@ -196,6 +212,9 @@ resource apimNsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
   }
 }
 
+// No outbound rules: for a standard (not network isolated) Application Gateway Microsoft
+// requires the default outbound rules and says custom outbound deny rules must not be
+// created.
 resource gatewayNsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
   name: '${nsgPrefix}-agw'
   location: location
@@ -231,9 +250,38 @@ resource gatewayNsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
         }
       }
       {
+        // Same reason as on the apim subnet; Microsoft says this rule must not be
+        // overridden by a deny.
+        name: 'Allow_Inbound_Azure_Load_Balancer'
+        properties: {
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          destinationAddressPrefix: '*'
+          access: 'Allow'
+          priority: 120
+          direction: 'Inbound'
+        }
+      }
+      {
+        // Platform health monitoring (TCP 65502 and 54321, UDP 12345) must not be blocked.
+        name: 'Allow_Inbound_Within_Subnet'
+        properties: {
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: gatewaySubnetPrefix
+          destinationAddressPrefix: gatewaySubnetPrefix
+          access: 'Allow'
+          priority: 130
+          direction: 'Inbound'
+        }
+      }
+      {
         name: 'Deny_Inbound_VirtualNetwork'
         properties: {
-          description: 'Nothing in the virtual network may call the Application Gateway.'
+          description: 'Nothing else in the virtual network may call the Application Gateway.'
           protocol: '*'
           sourcePortRange: '*'
           destinationPortRange: '*'
@@ -242,33 +290,6 @@ resource gatewayNsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
           access: 'Deny'
           priority: 4000
           direction: 'Inbound'
-        }
-      }
-      {
-        name: 'Allow_Outbound_HTTPS_To_API_Management'
-        properties: {
-          protocol: 'Tcp'
-          sourcePortRange: '*'
-          destinationPortRange: '443'
-          sourceAddressPrefix: gatewaySubnetPrefix
-          destinationAddressPrefix: apimSubnetPrefix
-          access: 'Allow'
-          priority: 100
-          direction: 'Outbound'
-        }
-      }
-      {
-        name: 'Deny_Lateral_Outbound_VirtualNetwork'
-        properties: {
-          description: 'Deny outbound lateral management connections from non-management hosts (Azure.NSG.LateralTraversal).'
-          protocol: '*'
-          sourcePortRange: '*'
-          destinationPortRange: '*'
-          sourceAddressPrefix: 'VirtualNetwork'
-          destinationAddressPrefix: 'VirtualNetwork'
-          access: 'Deny'
-          priority: 4096
-          direction: 'Outbound'
         }
       }
     ]

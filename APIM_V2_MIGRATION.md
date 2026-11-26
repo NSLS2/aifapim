@@ -21,6 +21,7 @@ request as work lands.
 | Dev network template (`aifapimv2-network.bicep`) | In this pull request |
 | Gateway template (`aifapimv2.bicep`) | Not started |
 | DNS records | Waiting; test with Azure-generated names |
+| Public IP policy exemption for the Application Gateway | **Not confirmed; blocks the gateway stage** |
 
 ## Why, and what Microsoft gives us
 
@@ -75,6 +76,8 @@ Existing Foundry accounts (East US, East US 2)     subnet pe
   Premium v2 (Standard v2 cannot be injected; it keeps a public gateway).
 - **No hub peering.** The networks stay stand-alone. All callers already reach
   a public address, so a private link to the BNL network has little benefit.
+- **Public address.** The Application Gateway needs a public IP resource, which
+  the BNL policy currently denies: see "Public IP policy".
 - **Network first.** Premium v2 placement in a network is fixed at creation, and
   a Key Vault network rule needs an existing subnet, so the network
   (`aifapimv2-network.bicep`) is deployed on its own, then the vault rule, then
@@ -146,6 +149,36 @@ $1,400 to $2,800 depending on whether Microsoft bills it at the secondary-unit
 rate ($1.91781 an hour); this is not confirmed. One unit is expected to be
 enough, to be shown in dev (phase 3). Private endpoints add about $7 each.
 
+## Public IP policy (blocker for the gateway stage)
+
+A BNL management-group policy ("Deny public IPs", `Not allowed resource types`)
+blocks `Microsoft.Network/publicIPAddresses`; the first Classic dev deployment
+failed on it (a NAT gateway), see `AGENTS.md`. An Application Gateway with a
+public front end needs such a resource, so the Application Gateway cannot be
+deployed until the policy is lifted for these resource groups. The network
+stage (`aifapimv2-network.bicep`) creates no public address and is not
+affected. Classic works because its gateway address belongs to API Management,
+not to a public IP resource of ours.
+
+Ways forward, in order of preference:
+
+1. **Exemption** of the two resource groups (`rg-aifapimv2-dev-1` first) from
+   the policy, requested from the cloud administrators. Needed before phase 2
+   deploys the gateway.
+2. **Standard v2 without an Application Gateway.** The gateway keeps an
+   API Management address (expected to be allowed, as for Classic). Cost drops
+   to about $700 a month per stack, but the inbound lock is the `ip-filter`
+   policies alone, not a network security group, and the subnet-level firewall
+   rules that motivated Premium v2 are lost.
+3. **Azure Front Door** (a Microsoft-managed edge) in front of a Premium v2
+   gateway. Not investigated: whether it can reach an injected instance, what it
+   costs, and whether the policy affects it.
+
+Private-only (a Private Application Gateway with Network Isolation, or the
+Premium v2 gateway alone) does not serve the callers: Hermes and the Anthropic
+addresses connect from outside, and the AIFAPIM networks are not connected to
+the BNL network.
+
 ## Certificates
 
 - `aifapimv2` and `aifapimv2-dev` were issued on 2026-11-26 with the
@@ -187,6 +220,8 @@ Dev always goes before prod.
 
 ### Phase 0: prerequisites
 
+- [ ] **Public IP policy: exemption for the Application Gateway, or a decision
+  on the alternatives** (see "Public IP policy"); gates phase 2
 - [x] Tier, design and names decided
 - [x] Certificates issued and in Key Vault
 - [x] Certificate renewal playbook (NSLS2/ansible pull request 5178)
@@ -313,6 +348,8 @@ Governance and recovery:
 
 ## Open questions
 
+- Whether the public IP policy can be lifted for these groups, or which
+  alternative is used (see "Public IP policy").
 - Whether a second Premium v2 unit is billed at the secondary-unit rate.
 - Whether the v2 `apim` subnet needs a Key Vault network rule.
 - The effect of deny-Internet outbound on a Premium v2 instance (phase 3).
