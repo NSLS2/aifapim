@@ -24,6 +24,7 @@
             <metadata name="CallerId" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
             <metadata name="CallerName" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
             <metadata name="Client" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;callerClient&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
+            <metadata name="AgentClient" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;agentClient&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
             <metadata name="Api" value="@{ var v = context.Api.Name; return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
             <metadata name="Product" value="@{ var v = context.Product == null ? null : context.Product.Id; return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />
             <metadata name="Model" value="@{ var v = (string)context.Variables.GetValueOrDefault(&quot;usageModel&quot;, &quot;&quot;); return v == null || v.Length == 0 ? &quot;-&quot; : v; }" />

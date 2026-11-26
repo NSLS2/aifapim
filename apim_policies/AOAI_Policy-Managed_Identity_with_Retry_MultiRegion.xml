@@ -15,6 +15,20 @@
              subscription directly: context.Subscription is null without a key. -->
         <set-variable name="usageId" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerId&quot;, &quot;&quot;) : context.Subscription.Id)" />
         <set-variable name="usageName" value="@(context.Subscription == null ? (string)context.Variables.GetValueOrDefault(&quot;callerName&quot;, &quot;&quot;) : context.Subscription.Name)" />
+        <!-- Which tool called, for statistics only: a client sets both headers itself, so
+             never use this to decide access. X-Agent-Client wins when it is one of the
+             four known names; otherwise the User-Agent is matched; anything else is
+             "other". Kept to five values so the Agent Client metric dimension stays small. -->
+        <set-variable name="agentClient" value="@{
+            var h = context.Request.Headers.GetValueOrDefault(&quot;X-Agent-Client&quot;, &quot;&quot;).Trim().ToLowerInvariant();
+            if (h == &quot;opencode&quot; || h == &quot;opencode2&quot; || h == &quot;claude&quot; || h == &quot;codex&quot;) { return h; }
+            var ua = context.Request.Headers.GetValueOrDefault(&quot;User-Agent&quot;, &quot;&quot;).ToLowerInvariant();
+            if (ua.Contains(&quot;claude-cli&quot;) || ua.Contains(&quot;claude-code&quot;)) { return &quot;claude&quot;; }
+            if (ua.Contains(&quot;codex&quot;)) { return &quot;codex&quot;; }
+            if (System.Text.RegularExpressions.Regex.IsMatch(ua, &quot;opencode/(latest/)?2\\.&quot;)) { return &quot;opencode2&quot;; }
+            if (ua.Contains(&quot;opencode&quot;)) { return &quot;opencode&quot;; }
+            return &quot;other&quot;;
+        }" />
         <!-- Image requests per caller. Images carry no tokens, so the token limit does
              not cover them. One counter per caller (usageId) is shared by every image
              route of the gateway (the counter key is the same in all four image
@@ -98,6 +112,7 @@
                  set above. -->
             <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;deploymentId&quot;, &quot;&quot;))" />
             <dimension name="X-Forwarded-For" value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress))" />
+            <dimension name="Agent Client" value="@((string)context.Variables.GetValueOrDefault(&quot;agentClient&quot;, &quot;&quot;))" />
         </azure-openai-emit-token-metric>
             </when>
         </choose>
@@ -141,6 +156,7 @@
                     <dimension name="Product ID" />
                     <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;))" />
                     <dimension name="X-Forwarded-For" value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress))" />
+                    <dimension name="Agent Client" value="@((string)context.Variables.GetValueOrDefault(&quot;agentClient&quot;, &quot;&quot;))" />
                 </emit-metric>
             </when>
         </choose>
@@ -156,6 +172,7 @@
                     <dimension name="Product ID" />
                     <dimension name="Model" value="@((string)context.Variables.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;))" />
                     <dimension name="X-Forwarded-For" value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress))" />
+                    <dimension name="Agent Client" value="@((string)context.Variables.GetValueOrDefault(&quot;agentClient&quot;, &quot;&quot;))" />
                 </emit-metric>
             </when>
         </choose>

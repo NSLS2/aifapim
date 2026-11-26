@@ -122,8 +122,12 @@ param serviceProducts array = []
 // to any value the client sent, so only the last entry can be trusted.
 // Fastly-Client-IP is logged to see whether the WAF sets it; where it exists a
 // client can send its own value, so the same caution applies. Never add
-// Fastly-Key: it is an API token.
+// Fastly-Key: it is an API token. User-Agent and X-Agent-Client name the tool
+// that called (opencode, claude, codex); a client sets both itself, so they are
+// for statistics only. The policies' agentClient variable reads the same two.
 var loggedRequestHeaders = [
+  'User-Agent'
+  'X-Agent-Client'
   'X-Forwarded-For'
   'X-Sigsci-Requestid'
   'X-Sigsci-Agentresponse'

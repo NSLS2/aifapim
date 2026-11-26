@@ -143,7 +143,7 @@ function MetaBody($xml, $name) {
     if ($v.StartsWith('@(') -and $v.EndsWith(')')) { return 'return ' + $v.Substring(2, $v.Length - 3) + ';' }
     throw "metadata $name is not an expression"
 }
-$metaNames = @('RequestId', 'CallerType', 'CallerId', 'CallerName', 'Client', 'Api', 'Product', 'Model')
+$metaNames = @('RequestId', 'CallerType', 'CallerId', 'CallerName', 'Client', 'AgentClient', 'Api', 'Product', 'Model')
 function Body($xml, $name) {
     $v = ($xml.SelectNodes('//set-variable') | Where-Object { $_.name -eq $name } | Select-Object -First 1).value.Trim()
     if ($v.StartsWith('@{') -and $v.EndsWith('}')) { return $v.Substring(2, $v.Length - 3) }
@@ -208,6 +208,7 @@ public static class Pol {
   public static object CallerName(Ctx context) { $(Body $open 'callerName') }
   public static object UsageId(Ctx context) { $(Body $anthropic 'usageId') }
   public static object UsageName(Ctx context) { $(Body $anthropic 'usageName') }
+  public static object AgentClient(Ctx context) { $(Body $anthropic 'agentClient') }
   public static object SecondaryOnlyAoai(Ctx context) { $(SecondaryOnlyBody $aoai '|MAI-Image-2.6|gpt-6.2-sol|') }
   public static object SecondaryOnlyV1(Ctx context) { $(SecondaryOnlyBody $v1 '|MAI-Image-2.6|gpt-6.2-sol|') }
   public static object UsageModel(Ctx context) { $(Body $trace 'usageModel') }
@@ -343,6 +344,27 @@ Check (($m['CallerType'] -eq 'user') -and ($m['CallerId'] -eq $oid.ToLowerInvari
 $c = New-Object Ctx
 $m = MetaValues $c
 Check (AllNonEmpty $m) 'trace metadata, nothing set: no value is empty (a dash is used)'
+
+# The calling tool: X-Agent-Client when it is a known name, else the User-Agent, else other. All five
+# inference policies carry the same expression, and the trace and metrics read it.
+$agentExpr = foreach ($name in $inference) { [xml]$x = Get-Content -Raw (Join-Path $PolicyDir $name); Body $x 'agentClient' }
+Check (@($agentExpr | Select-Object -Unique).Count -eq 1) 'agentClient is the same expression in all five inference policies'
+function Agent($xAgent, $ua) {
+    $c = New-Object Ctx
+    if ($null -ne $xAgent) { $c.Request.Headers.d['X-Agent-Client'] = $xAgent }
+    if ($null -ne $ua) { $c.Request.Headers.d['User-Agent'] = $ua }
+    return [Pol]::AgentClient($c)
+}
+Check ((Agent 'opencode2' 'claude-cli/2.0 (external, cli)') -eq 'opencode2') 'agent client: X-Agent-Client wins over the User-Agent'
+Check ((Agent ' Codex ' $null) -eq 'codex') 'agent client: X-Agent-Client is trimmed and lower-cased'
+Check ((Agent 'evil' 'claude-cli/2.0 (external, cli)') -eq 'claude') 'agent client: an unknown X-Agent-Client falls back to the User-Agent'
+Check ((Agent $null 'claude-cli/2.0.31 (external, cli)') -eq 'claude') 'agent client: Claude Code user agent'
+Check ((Agent $null 'codex_cli_rs/0.50.0 (Linux 5.14; x86_64) tmux') -eq 'codex') 'agent client: Codex user agent'
+Check ((Agent $null 'opencode/1.4.3 ai-sdk/anthropic/2.0.1 ai-sdk/provider-utils/3.0.0') -eq 'opencode') 'agent client: opencode 1 user agent (a /3. in an ai-sdk part is not version 2)'
+Check ((Agent $null 'opencode/2.4.1') -eq 'opencode2') 'agent client: opencode 2 user agent'
+Check ((Agent $null 'opencode/latest/2.4.1/cli') -eq 'opencode2') 'agent client: opencode 2 user agent, latest/<version>/cli form'
+Check ((Agent $null 'python-httpx/0.27') -eq 'other') 'agent client: anything else is other'
+Check ((Agent $null $null) -eq 'other') 'agent client: no headers is other'
 
 # The request body log keeps a text body as it is, and replaces an audio upload by one line.
 $c = New-Object Ctx; $c.Request.Url.Path = '/openai/v1/responses'; $c.Request.Headers.d['Content-Type'] = 'application/json'; $c.Request.Body.text = '{"model":"gpt-5"}'
