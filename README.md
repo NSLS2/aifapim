@@ -436,7 +436,7 @@ modules/
   app-insights.bicep            # Application Insights
   cognitive-services-role.bicep # Cognitive Services / AI User RBAC for APIM system identity
   event-hub.bicep               # Event Hub namespace (private endpoint only; not wired to an APIM logger yet)
-  keyvault-role.bicep           # Key Vault RBAC for APIM user-assigned identity
+  keyvault-role.bicep           # Key Vault RBAC for the APIM system-assigned identity
   llm-latency-alerts.bicep      # Scheduled-query latency alerts on ApiManagementGatewayLogs
   log-analytics-workspace.bicep # Log Analytics workspace
   network.bicep                 # APIM subnet
@@ -831,10 +831,10 @@ AzureDiagnostics
 
 ## Custom Domains & TLS
 
-APIM supports custom domain names with TLS certificates from Azure Key Vault. A
-user-assigned managed identity is created and granted the **Key Vault Secrets
-User** role before APIM is deployed, solving the chicken-and-egg problem where
-APIM needs Key Vault access during creation.
+APIM supports custom domain names with TLS certificates from Azure Key Vault.
+The gateway reads them with its system-assigned identity, which is granted the
+**Key Vault Secrets User** role after APIM exists, so a new instance is
+deployed without `apimGatewayHostName` first and the hostname added afterwards.
 
 Certificates must be stored as **secrets** in Key Vault (APIM reads the PFX from
 the secret URL, not the certificate URL).

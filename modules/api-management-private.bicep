@@ -41,9 +41,6 @@ param gatewayKeyVaultSecretName string = ''
 @description('Key Vault secret name for the developer portal TLS certificate.')
 param portalKeyVaultSecretName string = ''
 
-@description('Resource ID of a user-assigned managed identity for Key Vault access. Leave empty if not using custom domains.')
-param userAssignedIdentityId string = ''
-
 @description('Disable the developer portal entirely.')
 param disableDeveloperPortal bool = true
 
@@ -97,10 +94,7 @@ resource apiManagementService 'Microsoft.ApiManagement/service@2023-03-01-previe
     capacity: skuCount
   }
   identity: {
-    type: !empty(userAssignedIdentityId) ? 'SystemAssigned, UserAssigned' : 'SystemAssigned'
-    userAssignedIdentities: !empty(userAssignedIdentityId) ? {
-      '${userAssignedIdentityId}': {}
-    } : null
+    type: 'SystemAssigned'
   }
   properties: {
     publisherName: publisherName

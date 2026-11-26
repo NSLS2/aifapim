@@ -744,9 +744,9 @@ Fetch the keys with
   - A write failure never reaches the client (fire and forget). Watch
     `StorageBlobLogs` and the `verify.sh` reconciliation instead.
 - **Custom TLS**: Certificates must be stored as **secrets** (not
-  certificates) in Key Vault. A user-assigned managed identity is created and
-  granted Key Vault Secrets User *before* APIM is deployed to solve the
-  chicken-and-egg problem.
+  certificates) in Key Vault. The gateway reads them with its system-assigned
+  identity (see "Hardening settings"), so a new instance is deployed without
+  `apimGatewayHostName` first.
 - **IP filtering**: All five inference policies share an inbound
   `<ip-filter action="allow">` block populated at deploy time from the
   `allowedClientIps` parameter in the bicepparam files. Entries may be bare
@@ -773,7 +773,7 @@ modules/
   app-insights.bicep            # Application Insights
   cognitive-services-role.bicep # Cognitive Services / AI User RBAC for APIM system identity
   event-hub.bicep               # Event Hub namespace (private endpoint only; not wired to an APIM logger yet)
-  keyvault-role.bicep           # Key Vault RBAC for APIM user-assigned identity
+  keyvault-role.bicep           # Key Vault RBAC for the APIM system-assigned identity
   llm-latency-alerts.bicep      # Scheduled-query latency alerts on ApiManagementGatewayLogs
   log-analytics-workspace.bicep # Log Analytics workspace
   network.bicep                 # APIM subnet (added to regions[0] vnet)
@@ -916,11 +916,9 @@ no-op cost-wise; the pinning is also harmless on those tiers.
   admits it as a trusted service). The role is written after APIM exists
   (`kvAccessSystem`), so a **new** instance cannot start with custom hostnames:
   deploy it without `apimGatewayHostName` first, then add the hostname. The
-  user-assigned identity (`id-<apim>`) no longer holds any role (the
-  `vaultIdentity` switch and its role assignment were removed 2026-11-26, after
-  the audit log showed no read by it since the switch); it is still attached to
-  APIM. Detaching and deleting it needs a service update, so do it in a
-  separate change.
+  user-assigned identity (`id-<apim>`) was removed in 2026-11 (its vault role
+  went on 2026-11-26, after the audit log showed no read by it since the
+  switch; the identity was detached with a service update and deleted).
 - **`lockResourceGroup`** puts a CanNotDelete lock on the resource group (prod
   only). Updates, key regeneration and deployments work; deleting anything in
   the group (a subscription, a named value, a model deployment, a blob

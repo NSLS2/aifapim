@@ -552,16 +552,6 @@ module network 'modules/network.bicep' = {
   }
 }
 
-// User-assigned managed identity. It held the Key Vault role that read the custom-domain
-// certificates until the gateways moved to their system-assigned identity (2026-11-25); the
-// role was removed on 2026-11-26 and it now holds no role. Detach and delete it in a later
-// change (APIM needs a service update to drop it).
-resource apimIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (!empty(keyVaultName)) {
-  name: 'id-${apiManagementServiceName}'
-  location: location
-  tags: tags
-}
-
 module apiManagement 'modules/api-management-private.bicep' = {
   name: 'api-management'
   params: {
@@ -580,7 +570,6 @@ module apiManagement 'modules/api-management-private.bicep' = {
     keyVaultResourceGroup: keyVaultResourceGroup
     gatewayKeyVaultSecretName: gatewayKeyVaultSecretName
     portalKeyVaultSecretName: portalKeyVaultSecretName
-    userAssignedIdentityId: !empty(keyVaultName) ? apimIdentity!.id : ''
     disableDeveloperPortal: disableDeveloperPortal
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
     tags: tags
