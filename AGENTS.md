@@ -501,7 +501,8 @@ Fetch the keys with
   condition.
 - **Model router** (`model-router`, Microsoft's trained router, format
   `OpenAI`) is a deployment like any other, reached through
-  `/deployments/model-router/chat/completions` (or `/openai/v1/chat/completions`);
+  `/deployments/model-router/chat/completions` (the v1 API has no
+  `chat/completions` route and answers 404; checked 2026-11-26);
   clients name it as the `model`. **It is Chat Completions only:** on dev,
   2026-11-11, `/openai/v1/responses` answered HTTP 400 "The requested
   operation is unsupported" (the same is reported for OpenCode,
