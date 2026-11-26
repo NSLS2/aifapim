@@ -1,22 +1,26 @@
-// Stage 1 of the Premium v2 gateway stacks (aifapimv2 and aifapimv2-dev): the virtual
-// network. The gateway itself (aifapimv2.bicep) is deployed later into this network.
+// The virtual network of the v2 gateway stacks (aifapimv2 and aifapimv2-dev), deployed
+// before the gateway itself (aifapimv2.bicep). Plan: APIM_V2_MIGRATION.md.
 //
-// Why a separate template: an API Management Premium v2 instance can only be placed in
-// a virtual network when it is created, and the Key Vault firewall can only name subnets
-// that already exist, so the network is deployed first and on its own. Plan:
-// APIM_V2_MIGRATION.md.
+// Stage 1 is API Management Standard v2, which integrates with the network for outbound
+// traffic only. Stage 2 is Premium v2 behind an Application Gateway, which is injected into
+// the network. A Premium v2 instance can only be placed in a network when it is created,
+// and the Key Vault firewall can only name subnets that already exist, so the network is
+// deployed on its own and its subnets for both stages are created now.
 //
 // Subnets:
-//   apim  API Management Premium v2 (injection). Delegated to the service, dedicated to
-//         one instance. Apart from health probes and its own units, the only inbound
-//         traffic allowed is HTTPS from the agw subnet.
-//   agw   Application Gateway, the only public entry. The Microsoft.KeyVault service
-//         endpoint lets it read its certificate from the firewalled Key Vault (add this
-//         subnet to the vault, see the bicep repository, azure/infra-certificates).
+//   int   Stage 1. Outbound integration of Standard v2. Delegated to
+//         Microsoft.Web/serverFarms, dedicated to one instance. Inbound NSG rules do not
+//         apply to an integrated instance, so its NSG holds outbound rules only.
 //   pe    Private endpoints (Foundry accounts, Event Hub, request log storage).
+//   apim  Stage 2. API Management Premium v2 (injection). Delegated to the service,
+//         dedicated to one instance. Apart from health probes and its own units, the only
+//         inbound traffic allowed is HTTPS from the agw subnet.
+//   agw   Stage 2. Application Gateway, the public entry. The Microsoft.KeyVault service
+//         endpoint lets it read its certificate from the firewalled Key Vault (the subnet is
+//         listed in the bicep repository, azure/infra-certificates).
 //
-// The outbound rules of the apim subnet allow what is documented or known to be needed
-// and do not yet deny Internet traffic: add that rule once the flows of a running dev
+// The outbound rules of the int and apim subnets allow what is documented or known to be
+// needed and do not yet deny Internet traffic: add that rule once the flows of a running dev
 // gateway are known (plan, phase 3).
 
 @description('Azure region. It must be the region of the API Management instance.')
@@ -35,16 +39,19 @@ param vnetName string
 @description('Address space of the virtual network.')
 param vnetAddressPrefix string
 
-@description('Subnet for API Management Premium v2. Dedicated to one instance; /27 is the minimum and /24 is recommended.')
+@description('Subnet for the outbound integration of API Management Standard v2. Dedicated to one instance; /27 is the minimum and /24 is recommended.')
+param integrationSubnetPrefix string
+
+@description('Subnet for API Management Premium v2 (stage 2). Dedicated to one instance; /27 is the minimum and /24 is recommended.')
 param apimSubnetPrefix string
 
-@description('Subnet for the Application Gateway. Dedicated to it; /24 is recommended.')
+@description('Subnet for the Application Gateway (stage 2). Dedicated to it; /24 is recommended.')
 param gatewaySubnetPrefix string
 
 @description('Subnet for private endpoints.')
 param privateEndpointSubnetPrefix string
 
-@description('Sources allowed to reach the Application Gateway on port 443. Empty allows the whole Internet.')
+@description('Sources allowed to reach the Application Gateway on port 443 (stage 2). Empty allows the whole Internet.')
 param gatewayInboundSources array = []
 
 var nsgPrefix = 'nsg-${vnetName}'
@@ -59,6 +66,30 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
         vnetAddressPrefix
       ]
     }
+  }
+}
+
+resource integrationNsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
+  name: '${nsgPrefix}-int'
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'Allow_Outbound_Azure_KeyVault'
+        properties: {
+          description: 'Documented dependency of API Management v2 virtual network integration.'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: 'VirtualNetwork'
+          destinationAddressPrefix: 'AzureKeyVault'
+          access: 'Allow'
+          priority: 100
+          direction: 'Outbound'
+        }
+      }
+    ]
   }
 }
 
@@ -321,6 +352,14 @@ resource privateEndpointNsg 'Microsoft.Network/networkSecurityGroups@2023-11-01'
 }
 
 var subnets = [
+  {
+    name: 'int'
+    prefix: integrationSubnetPrefix
+    nsgId: integrationNsg.id
+    delegation: 'Microsoft.Web/serverFarms'
+    serviceEndpoints: []
+    defaultOutboundAccess: true
+  }
   {
     name: 'apim'
     prefix: apimSubnetPrefix
