@@ -487,6 +487,18 @@ Fetch the keys with
   not exist" instead of a retry. Azure metrics showed no 429s or 5xx from
   `eastus2` in that window. If Claude is later deployed in `eastus`, add it
   to `modelDeployments[0]` and it will fail over automatically.
+- **A model that only the first region offers starts on that region.** The
+  primary backend (`eastus2`) answers 404 for it, which is not retried, so the
+  AOAI and the OpenAI v1 policy check the request's model against
+  `__SECONDARY_ONLY_MODELS__` and start such a request on the secondary
+  backend. `aifapim.bicep` fills it with `'|name|name|'`: the names in
+  `modelDeployments[0]` that are not in `modelDeployments[1]`. Today that is
+  the MAI image models, which have their own API, and the GPT models Foundry
+  offers in `eastus` only (`gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6.1-terra`,
+  2026-11). A model listing carries no model, so `GET /openai/v1/models` still
+  comes from `eastus2` and does not list them; `GET /catalog` does. To use one,
+  add it to `modelDeployments[0]` only. `caller-policy-test.ps1` compiles the
+  condition.
 - **Model router** (`model-router`, Microsoft's trained router, format
   `OpenAI`) is a deployment like any other, reached through
   `/deployments/model-router/chat/completions` (or `/openai/v1/chat/completions`);

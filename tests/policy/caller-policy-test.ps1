@@ -121,6 +121,21 @@ $appBranch = $open.SelectSingleNode('//choose/when[contains(@condition, "callerI
 Check (($null -ne $appBranch) -and ($appBranch.SelectSingleNode('return-response/set-status').code -eq '403') -and ($appBranch.SelectNodes('.//validate-azure-ad-token').Count -eq 0)) 'an app token is refused with 403, never validated or accepted'
 Check (-not (Get-Content -Raw (Join-Path $PolicyDir 'Product_EntraOpen_Policy.xml')).Contains('__ENTRA_ROLE__')) 'the open product does not use the service app role'
 
+# A model offered in the first region only is not on the primary backend (a 404, never retried), so the
+# two OpenAI policies start such a request on the secondary backend. No other policy carries the list.
+$secondaryOnlyBackend = @{ 'AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml' = 'aoai-secondary-backend'; 'OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml' = 'aoai-v1-messages-secondary-backend' }
+foreach ($name in $inference) {
+    $text = Get-Content -Raw (Join-Path $PolicyDir $name)
+    $n = [regex]::Matches($text, '__SECONDARY_ONLY_MODELS__').Count
+    if ($secondaryOnlyBackend.ContainsKey($name)) {
+        $when = [regex]::Match($text, '<when condition="@\{[^"]*__SECONDARY_ONLY_MODELS__[^"]*">\s*<set-backend-service backend-id="([^"]+)" />')
+        Check (($n -eq 1) -and $when.Success -and ($when.Groups[1].Value -eq $secondaryOnlyBackend[$name])) ('{0}: models offered in the first region only start on {1}' -f $name, $secondaryOnlyBackend[$name])
+        Check ($text.IndexOf('name="canFailover"') -lt $text.IndexOf('__SECONDARY_ONLY_MODELS__')) ('{0}: the secondary-only start comes after the model is known' -f $name)
+    } else {
+        Check ($n -eq 0) ('{0}: has no secondary-only model list' -f $name)
+    }
+}
+
 # ---- compiled expressions ------------------------------------------------------------------
 function MetaBody($xml, $name) {
     $v = ($xml.SelectNodes('//metadata') | Where-Object { $_.name -eq $name } | Select-Object -First 1).value.Trim()
@@ -136,6 +151,13 @@ function Body($xml, $name) {
     throw "$name is not an expression"
 }
 [xml]$anthropic = Get-Content -Raw (Join-Path $PolicyDir $inference[2])
+[xml]$aoai = Get-Content -Raw (Join-Path $PolicyDir $inference[0])
+[xml]$v1 = Get-Content -Raw (Join-Path $PolicyDir $inference[1])
+function SecondaryOnlyBody($xml, $list) {
+    $n = $xml.SelectNodes('//when') | Where-Object { $_.GetAttribute('condition') -like '*__SECONDARY_ONLY_MODELS__*' } | Select-Object -First 1
+    $v = $n.GetAttribute('condition').Trim().Replace('__SECONDARY_ONLY_MODELS__', $list)
+    return $v.Substring(2, $v.Length - 3)
+}
 [xml]$trace = '<r>' + ((Get-Content -Raw (Join-Path $PolicyDir 'UsageTrace_Fragment.xml')) -replace '<!--[\s\S]*?-->', '') + '</r>'
 [xml]$reqlog = '<r>' + ((Get-Content -Raw (Join-Path $PolicyDir 'RequestBodyLog_Fragment.xml')) -replace '<!--[\s\S]*?-->', '') + '</r>'
 function HeaderBody($xml, $name) {
@@ -186,6 +208,8 @@ public static class Pol {
   public static object CallerName(Ctx context) { $(Body $open 'callerName') }
   public static object UsageId(Ctx context) { $(Body $anthropic 'usageId') }
   public static object UsageName(Ctx context) { $(Body $anthropic 'usageName') }
+  public static object SecondaryOnlyAoai(Ctx context) { $(SecondaryOnlyBody $aoai '|MAI-Image-2.6|gpt-6.2-sol|') }
+  public static object SecondaryOnlyV1(Ctx context) { $(SecondaryOnlyBody $v1 '|MAI-Image-2.6|gpt-6.2-sol|') }
   public static object UsageModel(Ctx context) { $(Body $trace 'usageModel') }
   public static object StreamMeta(Ctx context) { $(HeaderBody $reqlog 'x-ms-meta-stream') }
   public static object LogContentType(Ctx context) { $(HeaderBody $reqlog 'x-ms-blob-content-type') }
@@ -254,6 +278,18 @@ $c.Variables.d['callerId'] = $oid.ToLowerInvariant(); $c.Variables.d['callerName
 Check (([Pol]::UsageId($c) -eq $oid.ToLowerInvariant()) -and ([Pol]::UsageName($c) -eq 'Ada Lovelace')) 'a keyless request is named by the token caller'
 $c = New-Object Ctx
 Check (([Pol]::UsageId($c) -eq '') -and ([Pol]::UsageName($c) -eq '')) 'no subscription and no caller gives an empty name (and does not throw)'
+
+# Which requests start on the secondary backend: only a model in the first-region-only list, matched whole.
+foreach ($case in @(
+    @('gpt-6.2-sol', $true), @('MAI-Image-2.6', $true), @('gpt-6.2', $false), @('gpt-6.2-sol-extra', $false),
+    @('gpt-6.1-sol', $false), @('', $false))) {
+    $c = New-Object Ctx; $c.Variables.d['deploymentName'] = $case[0]
+    Check (([Pol]::SecondaryOnlyAoai($c) -eq $case[1])) ('AOAI policy: deployment "{0}" starts on the secondary: {1}' -f $case[0], $case[1])
+    $c = New-Object Ctx; $c.Variables.d['requestModel'] = $case[0]
+    Check (([Pol]::SecondaryOnlyV1($c) -eq $case[1])) ('v1 policy: model "{0}" starts on the secondary: {1}' -f $case[0], $case[1])
+}
+$c = New-Object Ctx
+Check (([Pol]::SecondaryOnlyAoai($c) -eq $false) -and ([Pol]::SecondaryOnlyV1($c) -eq $false)) 'a request with no model (a listing) stays on the primary'
 
 # The model in the usage record comes from the client.
 $c = New-Object Ctx; $c.Variables.d['requestModel'] = 'claude sonnet`n<x>'

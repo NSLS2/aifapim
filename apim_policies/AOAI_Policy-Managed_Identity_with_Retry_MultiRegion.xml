@@ -64,6 +64,20 @@
             var model = (string)context.Variables.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;);
             return model.Length &gt; 0 &amp;&amp; &quot;__SECONDARY_MODELS__&quot;.Contains(&quot;|&quot; + model + &quot;|&quot;);
         }" />
+        <!-- A model offered in the secondary region only is not on the primary
+             backend, which answers 404 and is not retried, so such a request
+             starts on the secondary backend. aifapim.bicep fills in the list
+             below, as '|name|name|...', with the models in modelDeployments[0]
+             that are not in modelDeployments[1]. The placeholder is replaced
+             everywhere it appears, so it must stay out of comments. -->
+        <choose>
+            <when condition="@{
+                var model = (string)context.Variables.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;);
+                return model.Length &gt; 0 &amp;&amp; &quot;__SECONDARY_ONLY_MODELS__&quot;.Contains(&quot;|&quot; + model + &quot;|&quot;);
+            }">
+                <set-backend-service backend-id="aoai-secondary-backend" />
+            </when>
+        </choose>
         <!-- Image requests (paths containing /images/) carry no token usage:
              the token limit and token metric policies are built for text and
              are skipped for them. Image requests are counted in outbound. -->

@@ -213,8 +213,12 @@ var allowedIpsXml = join(map(allowedClientIps, ip => contains(ip, '/')
 //   __METRIC_NAMESPACE__   -> apimProductName (App Insights custom-metric namespace)
 //   __SECONDARY_MODELS__   -> secondaryModelList (models deployed in the secondary region;
 //                             the policies fail over only for these)
+//   __SECONDARY_ONLY_MODELS__ -> secondaryOnlyModelList (models in the first region only; the two
+//                             OpenAI policies start those requests on the secondary backend)
 //   <!-- __REQUEST_LOG__ --> -> inboundLogXml (usage trace and request body log blocks, or nothing)
 var secondaryModelList = '|${join(map(modelDeployments[0], d => d.name), '|')}|'
+var primaryModelNames = length(modelDeployments) > 1 ? map(modelDeployments[1], d => d.name) : []
+var secondaryOnlyModelList = '|${join(map(filter(modelDeployments[0], d => !contains(primaryModelNames, d.name)), d => d.name), '|')}|'
 
 // Request body log. The three inference policies carry the marker comment below
 // in <inbound>. It is replaced by apim_policies/RequestBodyLog_Fragment.xml
@@ -229,7 +233,7 @@ var requestLogXml = requestBodyLogging ? replace(replace(loadTextContent('apim_p
 // marker, before the request body log, when usageTrace is true.
 var usageTraceXml = usageTrace ? loadTextContent('apim_policies/UsageTrace_Fragment.xml') : ''
 var inboundLogXml = '${usageTraceXml}${requestLogXml}'
-var openApiXml = replace(replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute))
+var openApiXml = replace(replace(replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
 
 // Anthropic API policy (multi-region retry variant).
 // The claude-auto block (apim_policies/ClaudeAuto_Fragment.xml) replaces the
@@ -241,7 +245,7 @@ var claudeAutoXml = empty(claudeAuto) ? '' : replace(replace(replace(replace(rep
 var anthropicApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), claudeAutoMarker, claudeAutoXml), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml)
 
 // OpenAI v1 Messages API policy (multi-region retry variant).
-var openaiV1MessagesApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+var openaiV1MessagesApiXml = replace(replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
 
 // Black Forest Labs API policy (multi-region retry variant).
 var bflApiXml = replace(replace(replace(replace(replace(replace(loadTextContent('apim_policies/BlackForestLabs_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
