@@ -201,6 +201,79 @@
         }
       }
     },
+    "/transcriptions": {
+      "get": {
+        "operationId": "getTranscriptionCatalog",
+        "summary": "List all available speech-to-text models with their route and limits",
+        "description": "Speech-to-text models are not in GET /catalog: a chat client would offer them as chat models.",
+        "responses": {
+          "200": {
+            "description": "Array of speech-to-text model entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "name",
+                      "provider",
+                      "route",
+                      "max_file_mb",
+                      "timestamps",
+                      "speaker_labels",
+                      "residency"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Model deployment name (also in the route path)"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "Human-readable display name"
+                      },
+                      "provider": {
+                        "type": "string"
+                      },
+                      "route": {
+                        "type": "object",
+                        "description": "Gateway route: method, the full path (it includes the deployment name), api-version query and body type"
+                      },
+                      "max_file_mb": {
+                        "type": "integer",
+                        "description": "Largest audio file to upload, in MB"
+                      },
+                      "timestamps": {
+                        "type": "boolean",
+                        "description": "Whether the response carries word or segment timestamps"
+                      },
+                      "speaker_labels": {
+                        "type": "boolean",
+                        "description": "Whether the response labels speakers"
+                      },
+                      "residency": {
+                        "type": "string",
+                        "description": "DataZone (processed in the US data zone) or Global (may be processed outside the US)"
+                      },
+                      "retires": {
+                        "type": "string",
+                        "description": "Date Microsoft retires the model (YYYY-MM-DD)"
+                      },
+                      "notes": {
+                        "type": "string",
+                        "description": "Anything a caller should know, such as the response shape"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/routers": {
       "get": {
         "operationId": "getRouterCatalog",

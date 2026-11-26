@@ -191,8 +191,8 @@ Fetch the keys with
     Output is always one PNG; width and height are at least 768 with a total of
     at most 2,359,296 pixels. Grouped under `apimProductName` product and the
     service products.
-  - `catalog-api` — path `catalog`, `GET /catalog`, `GET /catalog/images` and
-    `GET /catalog/embeddings`.
+  - `catalog-api` — path `catalog`, `GET /catalog`, `GET /catalog/images`,
+    `GET /catalog/embeddings` and `GET /catalog/transcriptions`.
     `/catalog` returns a static
     JSON array of chat-LLM models with `id`, `name`, `provider`, `context`,
     and `output` fields baked in at deploy time from `model-catalog.json`
@@ -212,6 +212,15 @@ Fetch the keys with
     `retires` and `notes`. It is separate for the same reason as the image
     catalog: an embedding model has provider `OpenAI`, so in `/catalog` it would
     be offered as a chat model. Operation id `getEmbeddingCatalog`.
+    `/catalog/transcriptions` returns the speech-to-text models, baked in from
+    `transcription-catalog.json` (the `transcriptionCatalogJson` param): `id`,
+    `name`, `provider`, `route` (method, the full path with the deployment
+    name, `query` with the `api-version`, and body type `multipart`),
+    `max_file_mb`,
+    `timestamps`, `speaker_labels`, `residency`, `retires` and `notes`. It is
+    separate for the same reason: these models have provider `OpenAI`, so in
+    `/catalog` they would be offered as chat models and fail. Operation id
+    `getTranscriptionCatalog`; empty (`[]`) where none is deployed.
     `/catalog/routers` returns the model routers, baked in from
     `router-catalog.json` (the `routerCatalogJson` param): `id`, `name`,
     `provider`, `context` and `output` (the smallest of the models it can
@@ -232,7 +241,8 @@ Fetch the keys with
     `<API path> + <operation urlTemplate>`. The catalog API uses
     `path = 'catalog'` and `urlTemplate = '/'`, giving the effective route
     `/catalog`; the `/images` and `/embeddings` operations give
-    `/catalog/images`, `/catalog/embeddings` and `/catalog/routers`. Do **not**
+    `/catalog/images`, `/catalog/embeddings`, `/catalog/transcriptions` and
+    `/catalog/routers`. Do **not**
     put `/catalog` in the OpenAPI operation path — that doubles the segment to
     `/catalog/catalog` and produces a 404.
 - **Products** (the same on dev and prod). A key's product decides which
@@ -773,7 +783,7 @@ api_definitions/                # OpenAPI specs (loaded inline via loadTextConte
                                 #   AzureAnthropic_OpenAPI.json            (Anthropic Messages API)
                                 #   BlackForestLabs_OpenAPI.json           (POST /flux-2-pro; Black Forest Labs route)
                                 #   MAI_Image_OpenAPI.json                 (POST /images/generations and /images/edits)
-                                #   Catalog_OpenAPI.json                   (GET /catalog, /catalog/images and /catalog/embeddings; static model lists)
+                                #   Catalog_OpenAPI.json                   (GET /catalog, /catalog/images, /catalog/embeddings and /catalog/transcriptions; static model lists)
 resources/                      # User-supplied CA PEMs loaded via loadTextContent
                                 # in the bicepparam file (intermediateCaCert /
                                 # rootCaCert params). Gitignored except .gitkeep.
