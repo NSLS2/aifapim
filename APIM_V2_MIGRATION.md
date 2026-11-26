@@ -178,6 +178,8 @@ the certificate. The template is in NSLS2/bicep, `azure/infra-certificates`.
   branch of that commit.
 - aifapim is merged first: the companion settings load
   `../aifapim/aifapimv2*.bicep`.
+- The built-in all-access subscription is turned off on both v2 instances.
+- Request tracing is turned off on every subscription.
 
 ## Phases
 
@@ -243,12 +245,82 @@ Dev always goes before prod.
 Rollback before phase 6: point DNS and Hermes back at Classic, which keeps its
 keys and configuration.
 
+## Hardening checklist
+
+From Microsoft's "Secure your Azure API Management deployment" and the
+"Azure API Management (Classic): Log Review Guide" (25 November 2026), whose
+own advice is to keep secrets in Key Vault, use an internal virtual network and
+consider v2. Items are checked in dev (phase 3) and again in prod.
+
+Decided:
+
+- [ ] Built-in all-access subscription (`master`) turned off: suspended in the
+  template, or removed if APIM allows it; its state is checked in dev.
+- [ ] `allowTracing: false` on every subscription, in the gateway template and
+  in the key tooling of the companion repository.
+
+Network:
+
+- [x] Gateway injected in a virtual network with a private address; the only
+  public entry is the Application Gateway (network template)
+- [x] `agw` subnet admits only the allowed sources; `apim` subnet admits only
+  `agw` (network template)
+- [ ] Deny outbound Internet on the `apim` subnet, once the flows are known
+- [ ] `ip-filter` policies kept, reading `X-Forwarded-For` safely
+- [ ] Application Gateway with a web application firewall: decide (see "Open
+  questions")
+- [ ] DDoS protection: Azure DDoS Protection is not available for the v2
+  tiers; decide whether the Application Gateway's public address needs it
+
+TLS:
+
+- [ ] Application Gateway TLS policy: TLS 1.2 or later, strong ciphers only
+  (the v2 tiers cannot set ciphers)
+- [ ] Certificates from Key Vault with an expiry alert (phase 3)
+
+Identity and access:
+
+- [ ] Least-privilege roles on the v2 instances: review the role assignments
+  (Service Reader or Operator instead of Contributor or Owner), and the
+  inherited subscription roles (prefer PIM)
+- [ ] Conditional Access with MFA for the people who administer APIM, its
+  policies, the vault and the network
+- [ ] Subscription keys are not authentication: keep the Entra ID token on the
+  agents and open products, and the NAT-pool lock on the internal products
+- [ ] System-assigned identity for Key Vault; no credential stored in APIM (no
+  named-value secrets, no backend keys, local authentication off on Foundry,
+  Event Hub and storage)
+- [ ] Developer portal off; no users, identity providers or sign-up
+
+Logging and monitoring:
+
+- [ ] Gateway and LLM logs to Log Analytics; v2 CPU and memory metrics with an
+  alert in place of the Classic capacity metric
+- [x] Activity log export and Key Vault audit log (NSLS2/bicep)
+- [ ] Entra sign-in and audit logs for the apps used by APIM
+- [ ] Alert on unhealthy Application Gateway backends
+- [ ] Defender for APIs and the built-in Azure Policy definitions for APIM
+  (virtual network, encrypted protocols): decide
+
+Governance and recovery:
+
+- [ ] CanNotDelete lock and tags on both resource groups
+- [ ] The v2 tiers have no backup and restore: the configuration is this
+  repository, and the subscription keys are kept as an encrypted snapshot
+  (`rotate-keys.py snapshot` in the companion repository) after every change
+- [ ] Direct management API and Git configuration: not available on v2, nothing
+  to turn off
+
 ## Open questions
 
 - Whether a second Premium v2 unit is billed at the secondary-unit rate.
 - Whether the v2 `apim` subnet needs a Key Vault network rule.
 - The effect of deny-Internet outbound on a Premium v2 instance (phase 3).
 - Whether the PFX in Key Vault serves the intermediate certificates.
+- A web application firewall on the Application Gateway. Hermes is the WAF for
+  callers that go through it, but callers from the NAT pool connect directly.
+  The WAF SKU costs about $0.36 an hour fixed against $0.20 for the standard
+  one (about $115 more a month per stack), plus a higher capacity-unit charge.
 
 ## MOSAIC (microsoft/mosaic-apim)
 
