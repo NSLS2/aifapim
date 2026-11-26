@@ -346,7 +346,7 @@ more advanced usage.
   system-assigned managed identity (Azure AI User / Cognitive Services
   OpenAI User roles).
 - **Custom domains**: APIM gateway uses TLS certificates from Azure Key
-  Vault (RBAC-based), with InCommon CA certificates in the trust store.
+  Vault (RBAC-based).
 - **Retry & failover**: Automatic retry and failover from primary to
   secondary region.
 
@@ -463,9 +463,6 @@ api_definitions/
   BlackForestLabs_OpenAPI.json           # FLUX.2-pro (Black Forest Labs route) OpenAPI spec
   MAI_Image_OpenAPI.json                 # MAI image OpenAPI spec
   Catalog_OpenAPI.json                   # GET /catalog, /catalog/images, /catalog/embeddings and /catalog/transcriptions static model lists
-resources/                       # User-supplied CA PEMs loaded via loadTextContent
-                                 # in the bicepparam file. Directory is gitignored
-                                 # aside from a .gitkeep; see "Custom Domains & TLS".
 examples/
   test-apim.py                  # Smoke-test against APIM using a subscription key
   opencode.json                 # Ready-to-use OpenCode configuration
@@ -841,29 +838,6 @@ APIM needs Key Vault access during creation.
 
 Certificates must be stored as **secrets** in Key Vault (APIM reads the PFX from
 the secret URL, not the certificate URL).
-
-### Optional CA certificates
-
-Two optional parameters install PEM-encoded CA certificates into APIM's
-certificate store:
-
-- `intermediateCaCert` → APIM `CertificateAuthority` store
-- `rootCaCert` → APIM `Root` store
-
-Both default to empty (skip). Because `loadTextContent()` runs at bicepparam
-compile time, populate them in your `*.bicepparam` file rather than in the
-Bicep template itself:
-
-```bicep
-param intermediateCaCert = loadTextContent('resources/<your-intermediate>.pem')
-param rootCaCert         = loadTextContent('resources/<your-root>.pem')
-```
-
-The bundled `resources/` directory is gitignored aside from a `.gitkeep` —
-drop your PEM files there (or any path you prefer, relative to the bicepparam
-file) and uncomment the matching lines in `aifapim.example.bicepparam`. The
-module currently installs at most one cert per store; the parameters are
-singular strings, not arrays.
 
 ## Examples
 

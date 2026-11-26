@@ -65,12 +65,6 @@ param portalKeyVaultSecretName string = ''
 @description('Put a CanNotDelete lock on this resource group. Updates, key regeneration and deployments still work; deleting anything in the group (a subscription, a named value, a model deployment) needs the lock removed first.')
 param lockResourceGroup bool = false
 
-@description('PEM-encoded intermediate CA certificate to install in the APIM CertificateAuthority store. Leave empty to skip. Typically populated in the bicepparam file via loadTextContent(\'resources/<your-intermediate>.pem\').')
-param intermediateCaCert string = ''
-
-@description('PEM-encoded root CA certificate to install in the APIM Root store. Leave empty to skip. Typically populated in the bicepparam file via loadTextContent(\'resources/<your-root>.pem\').')
-param rootCaCert string = ''
-
 @description('Regions to deploy a virtual network and Azure OpenAI account into. Each entry must have a unique label and non-overlapping vnetAddressPrefix.')
 param regions array
 
@@ -586,8 +580,6 @@ module apiManagement 'modules/api-management-private.bicep' = {
     keyVaultResourceGroup: keyVaultResourceGroup
     gatewayKeyVaultSecretName: gatewayKeyVaultSecretName
     portalKeyVaultSecretName: portalKeyVaultSecretName
-    intermediateCaCert: intermediateCaCert
-    rootCaCert: rootCaCert
     userAssignedIdentityId: !empty(keyVaultName) ? apimIdentity!.id : ''
     disableDeveloperPortal: disableDeveloperPortal
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id

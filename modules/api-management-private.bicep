@@ -41,12 +41,6 @@ param gatewayKeyVaultSecretName string = ''
 @description('Key Vault secret name for the developer portal TLS certificate.')
 param portalKeyVaultSecretName string = ''
 
-@description('PEM-encoded intermediate CA certificate.')
-param intermediateCaCert string = ''
-
-@description('PEM-encoded root CA certificate.')
-param rootCaCert string = ''
-
 @description('Resource ID of a user-assigned managed identity for Key Vault access. Leave empty if not using custom domains.')
 param userAssignedIdentityId string = ''
 
@@ -91,22 +85,6 @@ var portalHostnameConfig = enablePortalDomain ? [
 
 var hostnameConfigurations = concat(defaultHostnameConfig, gatewayHostnameConfig, portalHostnameConfig)
 
-var intermediateCaCerts = !empty(intermediateCaCert) ? [
-  {
-    encodedCertificate: replace(replace(replace(intermediateCaCert, '-----BEGIN CERTIFICATE-----', ''), '-----END CERTIFICATE-----', ''), '\n', '')
-    storeName: 'CertificateAuthority'
-  }
-] : []
-
-var rootCaCerts = !empty(rootCaCert) ? [
-  {
-    encodedCertificate: replace(replace(replace(rootCaCert, '-----BEGIN CERTIFICATE-----', ''), '-----END CERTIFICATE-----', ''), '\n', '')
-    storeName: 'Root'
-  }
-] : []
-
-var certificates = concat(intermediateCaCerts, rootCaCerts)
-
 resource aiParent 'Microsoft.Insights/components@2020-02-02-preview' existing = {
   name: aiName
 }
@@ -132,7 +110,6 @@ resource apiManagementService 'Microsoft.ApiManagement/service@2023-03-01-previe
     }
     virtualNetworkType: virtualNetworkType
     hostnameConfigurations: hostnameConfigurations
-    certificates: certificates
     developerPortalStatus: disableDeveloperPortal ? 'Disabled' : 'Enabled'
     // Pin properties that ARM would otherwise force-modify on every deploy.
     // On Developer SKU (single unit) any service-level mutation transitions

@@ -15,7 +15,6 @@ input:
     - ".pixi/"
     - ".mypy_cache/"
     - "examples/"
-    - "resources/"
     - "api_definitions/"
     - "apim_policies/"
     - "diagrams/"
