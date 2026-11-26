@@ -136,7 +136,7 @@ deployed (reserved) in the dev network.
 | Network | Injected in External mode, NSG and route table in `network.bicep` | New `aifapimv2-network.bicep`; outbound integration subnet `int` |
 | API version | `2023-03-01-preview` | `2024-05-01` or later for v2 |
 | TLS ciphers | `customProperties` in `api-management-private.bicep` | Not available; platform defaults, checked in dev |
-| CA certificates | `certificates` list (InCommon) | Per backend only; check whether needed at all |
+| CA certificates | `certificates` list (InCommon) | Not used, and removed from Classic too (separate pull request): the live gateways serve an SSL.com chain from the Key Vault certificate, and nothing uses a client certificate |
 | Inbound lock | `gatewayInboundSources` on the APIM subnet NSG (dev) | Policy only (`ip-filter`); an NSG does not apply |
 | Caller address | `ip-filter` sees the caller | Same: no proxy in front |
 | Custom domain | APIM custom host name | Same, on the v2 instance |
