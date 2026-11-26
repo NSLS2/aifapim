@@ -174,6 +174,10 @@ func allowListXml(ips array, usable bool, viaFrontDoor bool) string => viaFrontD
 
 var allowedIpsXml = allowListXml(allowedClientIps, true, viaFrontDoor)
 
+// The Front Door WAF refuses a list in which an address lies inside a range of the same list, so
+// bare addresses covered by a listed CIDR are left out. (Two overlapping CIDRs are not handled.)
+func wafAllowList(ips array) array => filter(ips, ip => contains(ip, '/') || length(filter(ips, c => contains(c, '/') && ipNumber(ip) >= ipNumber(parseCidr(c).network) && ipNumber(ip) <= ipNumber(parseCidr(c).broadcast))) == 0)
+
 // The APIM AOAI policy is always the multi-region variant.
 // Policies and API definition are loaded from the local repository so deployments do not depend on external URLs.
 // Substitutions applied to each policy XML:
@@ -443,7 +447,7 @@ module frontDoor 'modules/front-door.bicep' = {
     apimId: apimServiceRef.id
     apimHostName: apiManagement.outputs.apiManagementDefaultHostName
     apimLocation: location
-    allowedClientIps: allowedClientIps
+    allowedClientIps: wafAllowList(allowedClientIps)
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
     tags: tags
   }
@@ -457,13 +461,14 @@ resource apimServiceRef 'Microsoft.ApiManagement/service@2024-05-01' existing = 
 }
 
 // The built-in all-access subscription is scoped to the whole service, so its keys skip every
-// product policy, including the Entra token check of the agent products. Nothing uses it.
+// product policy, including the Entra token check of the agent products. Nothing uses it. APIM
+// accepts only a relative scope here, so it is written as '/apis' (all APIs) while suspended.
 resource builtInSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
   parent: apimServiceRef
   name: 'master'
   properties: {
     displayName: 'Built-in all-access subscription'
-    scope: '${apimServiceRef.id}/'
+    scope: '/apis'
     state: 'suspended'
     allowTracing: false
   }
