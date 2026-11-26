@@ -783,12 +783,15 @@ Fetch the keys with
 aifapim.bicep                           # Orchestrator — start reading here
 aifapim.example.bicepparam              # Parameter template — copy to aifapim-<env>.bicepparam and customize
 aifapimv2-network.bicep                 # v2 gateway stacks: virtual network (plan: APIM_V2_MIGRATION.md)
+aifapimv2.bicep                         # v2 gateway stacks: Standard v2 gateway in front of the existing Foundry accounts
 model-catalog.example.json              # Example GET /catalog body loaded by the example parameter file
 llm-token-usage-workbook.example.bicep  # Reference snapshot only — NOT deployed (canonical in aifapim-config)
 modules/
   aif.bicep                     # AI Foundry account + private endpoint
   aif-deployments.bicep         # Model deployments (sub-module; avoids race on account provisioning)
   api-management-private.bicep  # APIM instance, custom domains, CA certs
+  api-management-v2.bicep       # APIM Standard v2 instance (aifapimv2.bicep): outbound integration subnet, custom domain
+  foundry-private-endpoint.bicep # Private endpoint and DNS zone group for an existing Foundry account in another resource group
   api.bicep                     # All five inference APIs, the catalog API, backends, product, diagnostics
   app-insights.bicep            # Application Insights
   cognitive-services-role.bicep # Cognitive Services / AI User RBAC for APIM system identity

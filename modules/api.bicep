@@ -138,7 +138,7 @@ var loggedRequestHeaders = [
   'Fastly-SSL'
 ]
 
-resource parentAPIM 'Microsoft.ApiManagement/service@2023-03-01-preview' existing = {
+resource parentAPIM 'Microsoft.ApiManagement/service@2024-05-01' existing = {
   name: apimName
 }
 
@@ -157,7 +157,7 @@ resource parentAPIM 'Microsoft.ApiManagement/service@2023-03-01-preview' existin
 // (backend to backend, API to API, policy to diagnostic, and so on). See
 // aifapim AGENTS.md "Developer SKU ServiceLocked race".
 
-resource primarybackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview' = {
+resource primarybackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
   name: 'aoai-primary-backend'
   parent: parentAPIM
   properties: {
@@ -167,7 +167,7 @@ resource primarybackend 'Microsoft.ApiManagement/service/backends@2023-03-01-pre
   }
 }
 
-resource secondarybackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview' = {
+resource secondarybackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
   name: 'aoai-secondary-backend'
   parent: parentAPIM
   dependsOn: [primarybackend]
@@ -178,7 +178,7 @@ resource secondarybackend 'Microsoft.ApiManagement/service/backends@2023-03-01-p
   }
 }
 
-resource openaiV1MessagesPrimaryBackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview' = {
+resource openaiV1MessagesPrimaryBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
   name: 'aoai-v1-messages-primary-backend'
   parent: parentAPIM
   dependsOn: [secondarybackend]
@@ -189,7 +189,7 @@ resource openaiV1MessagesPrimaryBackend 'Microsoft.ApiManagement/service/backend
   }
 }
 
-resource openaiV1MessagesSecondaryBackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview' = {
+resource openaiV1MessagesSecondaryBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
   name: 'aoai-v1-messages-secondary-backend'
   parent: parentAPIM
   dependsOn: [openaiV1MessagesPrimaryBackend]
@@ -200,7 +200,7 @@ resource openaiV1MessagesSecondaryBackend 'Microsoft.ApiManagement/service/backe
   }
 }
 
-resource anthropicPrimaryBackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview' = {
+resource anthropicPrimaryBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
   name: 'anthropic-primary-backend'
   parent: parentAPIM
   dependsOn: [openaiV1MessagesSecondaryBackend]
@@ -211,7 +211,7 @@ resource anthropicPrimaryBackend 'Microsoft.ApiManagement/service/backends@2023-
   }
 }
 
-resource anthropicSecondaryBackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview' = {
+resource anthropicSecondaryBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
   name: 'anthropic-secondary-backend'
   parent: parentAPIM
   dependsOn: [anthropicPrimaryBackend]
@@ -222,7 +222,7 @@ resource anthropicSecondaryBackend 'Microsoft.ApiManagement/service/backends@202
   }
 }
 
-resource bflPrimaryBackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview' = {
+resource bflPrimaryBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
   name: 'bfl-primary-backend'
   parent: parentAPIM
   dependsOn: [anthropicSecondaryBackend]
@@ -233,7 +233,7 @@ resource bflPrimaryBackend 'Microsoft.ApiManagement/service/backends@2023-03-01-
   }
 }
 
-resource bflSecondaryBackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview' = {
+resource bflSecondaryBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
   name: 'bfl-secondary-backend'
   parent: parentAPIM
   dependsOn: [bflPrimaryBackend]
@@ -244,7 +244,7 @@ resource bflSecondaryBackend 'Microsoft.ApiManagement/service/backends@2023-03-0
   }
 }
 
-resource maiBackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview' = {
+resource maiBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
   name: 'mai-backend'
   parent: parentAPIM
   dependsOn: [bflSecondaryBackend]
@@ -255,7 +255,7 @@ resource maiBackend 'Microsoft.ApiManagement/service/backends@2023-03-01-preview
   }
 }
 
-resource api 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = {
+resource api 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: parentAPIM
   name: apiName
   dependsOn: [maiBackend]
@@ -273,7 +273,7 @@ resource api 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = {
   }
 }
 
-resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-03-01-preview' = {
+resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
   parent: api
   name: 'policy'
   properties: {
@@ -324,7 +324,7 @@ resource aoaiDiagnostic 'Microsoft.ApiManagement/service/apis/diagnostics@2024-0
   }
 }
 
-resource diagnostic 'Microsoft.ApiManagement/service/diagnostics@2023-03-01-preview' = {
+resource diagnostic 'Microsoft.ApiManagement/service/diagnostics@2024-05-01' = {
   parent: parentAPIM
   dependsOn: [aoaiDiagnostic]
   name: 'applicationinsights'
@@ -372,7 +372,7 @@ resource diagnostic 'Microsoft.ApiManagement/service/diagnostics@2023-03-01-prev
 
 // --- Azure OpenAI v1 Messages API ---
 
-resource openaiV1MessagesApi 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = {
+resource openaiV1MessagesApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: parentAPIM
   name: openaiV1MessagesApiName
   dependsOn: [diagnostic]
@@ -393,7 +393,7 @@ resource openaiV1MessagesApi 'Microsoft.ApiManagement/service/apis@2023-03-01-pr
   }
 }
 
-resource openaiV1MessagesApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-03-01-preview' = {
+resource openaiV1MessagesApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
   parent: openaiV1MessagesApi
   name: 'policy'
   // The backends are siblings the policy refers to; the parent API is an
@@ -452,7 +452,7 @@ resource openaiV1MessagesDiagnostic 'Microsoft.ApiManagement/service/apis/diagno
 
 // --- Anthropic API ---
 
-resource anthropicApi 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = {
+resource anthropicApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: parentAPIM
   name: anthropicApiName
   dependsOn: [openaiV1MessagesDiagnostic]
@@ -473,7 +473,7 @@ resource anthropicApi 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' 
   }
 }
 
-resource anthropicApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-03-01-preview' = {
+resource anthropicApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
   parent: anthropicApi
   name: 'policy'
   properties: {
@@ -530,7 +530,7 @@ resource anthropicDiagnostic 'Microsoft.ApiManagement/service/apis/diagnostics@2
 // so it has its own API, backends and policy. The API path is the path Azure
 // uses, so a client changes only the host and the key header.
 
-resource bflApi 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = {
+resource bflApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: parentAPIM
   name: bflApiName
   dependsOn: [anthropicDiagnostic]
@@ -551,7 +551,7 @@ resource bflApi 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = {
   }
 }
 
-resource bflApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-03-01-preview' = {
+resource bflApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
   parent: bflApi
   name: 'policy'
   properties: {
@@ -594,7 +594,7 @@ resource bflDiagnostic 'Microsoft.ApiManagement/service/apis/diagnostics@2024-06
 // which differ from the OpenAI ones, and are deployed in the secondary region
 // only. The API path is the path Azure uses.
 
-resource maiApi 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = {
+resource maiApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: parentAPIM
   name: maiApiName
   dependsOn: [bflDiagnostic]
@@ -615,7 +615,7 @@ resource maiApi 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = {
   }
 }
 
-resource maiApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-03-01-preview' = {
+resource maiApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
   parent: maiApi
   name: 'policy'
   properties: {
@@ -654,7 +654,7 @@ resource maiDiagnostic 'Microsoft.ApiManagement/service/apis/diagnostics@2024-06
 
 // --- APIM product: groups all APIs under a single product ---
 
-resource apimProduct 'Microsoft.ApiManagement/service/products@2023-03-01-preview' = {
+resource apimProduct 'Microsoft.ApiManagement/service/products@2024-05-01' = {
   parent: parentAPIM
   name: apimProductName
   dependsOn: [maiDiagnostic]
@@ -670,30 +670,30 @@ resource apimProduct 'Microsoft.ApiManagement/service/products@2023-03-01-previe
   }
 }
 
-resource apimProductOpenAiApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = {
+resource apimProductOpenAiApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
   parent: apimProduct
   name: api.name
 }
 
-resource apimProductAnthropicApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = {
+resource apimProductAnthropicApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
   parent: apimProduct
   name: anthropicApi.name
   dependsOn: [apimProductOpenAiApi]
 }
 
-resource apimProductOpenAiV1MessagesApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = {
+resource apimProductOpenAiV1MessagesApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
   parent: apimProduct
   name: openaiV1MessagesApi.name
   dependsOn: [apimProductAnthropicApi]
 }
 
-resource apimProductBflApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = {
+resource apimProductBflApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
   parent: apimProduct
   name: bflApi.name
   dependsOn: [apimProductOpenAiV1MessagesApi]
 }
 
-resource apimProductMaiApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = {
+resource apimProductMaiApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
   parent: apimProduct
   name: maiApi.name
   dependsOn: [apimProductBflApi]
@@ -706,7 +706,7 @@ resource apimProductMaiApi 'Microsoft.ApiManagement/service/products/apis@2023-0
 // Chained after the main product associations to maintain the linear
 // dependsOn serialization required on Developer SKU APIM.
 
-resource catalogApi 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = {
+resource catalogApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: parentAPIM
   name: catalogApiName
   dependsOn: [apimProductMaiApi]
@@ -724,7 +724,7 @@ resource catalogApi 'Microsoft.ApiManagement/service/apis@2023-03-01-preview' = 
   }
 }
 
-resource catalogApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-03-01-preview' = {
+resource catalogApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
   parent: catalogApi
   name: 'policy'
   properties: {
@@ -738,7 +738,7 @@ resource catalogApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-03
 // Keys issued under this product cannot call inference endpoints.
 // Intended for the ansible catalog poller (machine consumer, vaulted key).
 
-resource catalogProduct 'Microsoft.ApiManagement/service/products@2023-03-01-preview' = {
+resource catalogProduct 'Microsoft.ApiManagement/service/products@2024-05-01' = {
   parent: parentAPIM
   name: catalogProductName
   dependsOn: [catalogApiPolicy]
@@ -751,7 +751,7 @@ resource catalogProduct 'Microsoft.ApiManagement/service/products@2023-03-01-pre
   }
 }
 
-resource catalogProductCatalogApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = {
+resource catalogProductCatalogApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
   parent: catalogProduct
   name: catalogApi.name
 }
@@ -761,7 +761,7 @@ resource catalogProductCatalogApi 'Microsoft.ApiManagement/service/products/apis
 // The service products below have it too. Chained after the catalog product
 // association to keep the sequential order the Developer SKU needs.
 
-resource apimProductCatalogApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = {
+resource apimProductCatalogApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
   parent: apimProduct
   name: catalogApi.name
   dependsOn: [catalogProductCatalogApi]
@@ -780,7 +780,7 @@ resource apimProductCatalogApi 'Microsoft.ApiManagement/service/products/apis@20
 // the open product under a new name instead.
 
 @batchSize(1)
-resource serviceProduct 'Microsoft.ApiManagement/service/products@2023-03-01-preview' = [for p in serviceProducts: {
+resource serviceProduct 'Microsoft.ApiManagement/service/products@2024-05-01' = [for p in serviceProducts: {
   parent: parentAPIM
   name: p.name
   dependsOn: [apimProductCatalogApi]
@@ -814,7 +814,7 @@ var serviceProductApiLinks = flatten(map(range(0, length(serviceProducts)), i =>
 var serviceProductInheritOnlyPolicy = '<policies><inbound><base /></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
 
 @batchSize(1)
-resource serviceProductPolicy 'Microsoft.ApiManagement/service/products/policies@2023-03-01-preview' = [for (p, i) in serviceProducts: {
+resource serviceProductPolicy 'Microsoft.ApiManagement/service/products/policies@2024-05-01' = [for (p, i) in serviceProducts: {
   parent: serviceProduct[i]
   name: 'policy'
   dependsOn: [serviceProduct]
@@ -825,7 +825,7 @@ resource serviceProductPolicy 'Microsoft.ApiManagement/service/products/policies
 }]
 
 @batchSize(1)
-resource serviceProductApi 'Microsoft.ApiManagement/service/products/apis@2023-03-01-preview' = [for link in serviceProductApiLinks: {
+resource serviceProductApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = [for link in serviceProductApiLinks: {
   parent: serviceProduct[link.productIndex]
   name: link.api
   dependsOn: [serviceProductPolicy]

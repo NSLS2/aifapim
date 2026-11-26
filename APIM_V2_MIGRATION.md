@@ -28,7 +28,7 @@ request as work lands.
 | Certificate renewal playbook | NSLS2/ansible pull request 5178 |
 | Key Vault firewall template | Deployed; dev `agw` rule kept for stage 2 |
 | Dev network (`aifapimv2-network.bicep`) | Deployed 2026-11-26; integration subnet to add |
-| Gateway template (`aifapimv2.bicep`, Standard v2) | Not started |
+| Gateway template (`aifapimv2.bicep`, Standard v2) | Written; not deployed. No request body log or Event Hub yet |
 | DNS records | Waiting; test on the default `azure-api.net` name |
 | Public IP policy | Not a blocker for stage 1; blocks stage 2 |
 
@@ -258,7 +258,8 @@ Dev always goes before prod.
   the same time (see "Public IP policy")
 - [ ] Explain the November Log Analytics cost in prod
 - [ ] Search the repository for Classic-only features (see "Why")
-- [ ] Decide: copy existing key values to v2, or issue new keys
+- [x] Decided: copy the existing key values to v2, so users change only the
+  host name
 - [ ] Decide: Hermes origin for `aifapimv2` (the custom host name directly)
 - [ ] DNS records for both host names (after the first dev tests)
 
@@ -266,12 +267,18 @@ Dev always goes before prod.
 
 - [x] `aifapimv2-network.bicep` and `aifapimv2-dev-network.bicepparam`
 - [ ] Integration subnet `int` in the network template and settings
-- [ ] `aifapimv2.bicep`: APIM Standard v2 with the integration subnet and the
+- [x] `aifapimv2.bicep`: APIM Standard v2 with the integration subnet and the
   custom domain, private endpoints and DNS zones for the existing Foundry
-  accounts, role assignments, logging, request log
-- [ ] API version `2024-05-01` or later in the shared modules
-- [ ] Settings for the gateway (`aifapimv2-dev.bicepparam`, prod)
-- [ ] Key copy script and the scripts that name the APIM resource (companion)
+  accounts, role assignments, logging (policies, APIs and products rendered as
+  in `aifapim.bicep`)
+- [ ] Request body log in the v2 template (the Event Hub is not used, so it is
+  left out)
+- [x] API version 2024-05-01 in `modules/api.bicep`. Classic's `aifapim.bicep`
+  builds with it too; run a what-if on Classic dev before any Classic redeploy
+- [x] Settings for the dev gateway (`aifapimv2-dev.bicepparam`)
+- [ ] Settings for the prod gateway
+- [ ] Key copy script (same key values) and the scripts that name the APIM
+  resource (companion)
 
 ### Phase 2: deploy dev
 
