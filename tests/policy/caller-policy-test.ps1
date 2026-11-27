@@ -398,6 +398,12 @@ $c = New-Object Ctx; $c.Subscription = New-Object Sub; $c.Subscription.Id = 'svc
 Check ((Event $c).callerType -eq 'key') 'security event: a request with a subscription is a key caller'
 $c = New-Object Ctx; $c.Variables.d['callerType'] = 'user'
 Check ((Event $c).callerType -eq 'user') 'security event: a keyless request keeps the caller type the open product set'
+$c = New-Object Ctx; $c.Subscription = New-Object Sub; $c.Subscription.Id = 'sub-oid'; $c.Subscription.Name = 'Grace Hopper'
+Check (((Event $c).callerId -eq 'sub-oid') -and ((Event $c).callerName -eq 'Grace Hopper')) 'security event: before usageId is set, a keyed request is named by its subscription'
+$c = New-Object Ctx; $c.Variables.d['callerId'] = 'oid-1'; $c.Variables.d['callerName'] = 'Ada Lovelace'
+Check (((Event $c).callerId -eq 'oid-1') -and ((Event $c).callerName -eq 'Ada Lovelace')) 'security event: before usageId is set, a keyless request is named by the token check (catalog, early refusal)'
+$c.Variables.d['usageId'] = 'u-1'; $c.Variables.d['usageName'] = 'U One'
+Check (((Event $c).callerId -eq 'u-1') -and ((Event $c).callerName -eq 'U One')) 'security event: usageId and usageName win once an API policy has set them'
 $c = New-Object Ctx; $c.LastError = New-Object ErrInfo; $c.LastError.Source = 'ip-filter'; $c.Response.StatusCode = 403
 $e = Event $c
 Check (($e.status -eq 403) -and ($e.errorSource -eq 'ip-filter') -and ($e.requestId.Length -gt 0)) 'security event: a refusal records its status and reason'

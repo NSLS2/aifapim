@@ -3,8 +3,10 @@
              product check or the rate limit refused. It holds who called (key, object id,
              address), what (API, path, model) and the outcome (status, error reason, time), and no
              prompt, response or header value except a cut user agent. When no API policy has
-             run yet (an unmatched route), the address is resolved here the same way as in the
-             API policies: the connecting address, or X-Azure-SocketIP when that is private. Everything that comes from
+             run yet (an unmatched route, a catalog call, an early refusal), the address is resolved here
+             the way the API policies do (the connecting address, or X-Azure-SocketIP when that is private),
+             and the caller comes from the subscription, or from the callerId and callerName of the
+             open product's token check. Everything that comes from
              the client is cut, and JSON encoding keeps it from breaking out of its field. A failure
              while building the line sends an error record instead of failing the request. -->
         <log-to-eventhub logger-id="security-events">@{
@@ -33,8 +35,10 @@
                 e[&quot;product&quot;] = context.Product == null ? &quot;&quot; : context.Product.Id;
                 e[&quot;subscription&quot;] = context.Subscription == null ? &quot;&quot; : context.Subscription.Id;
                 e[&quot;callerType&quot;] = context.Subscription == null ? (string)v.GetValueOrDefault(&quot;callerType&quot;, &quot;&quot;) : &quot;key&quot;;
-                e[&quot;callerId&quot;] = (string)v.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;);
-                e[&quot;callerName&quot;] = (string)v.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;);
+                var usageId = (string)v.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;);
+                var usageName = (string)v.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;);
+                e[&quot;callerId&quot;] = usageId.Length &gt; 0 ? usageId : (context.Subscription != null ? context.Subscription.Id : (string)v.GetValueOrDefault(&quot;callerId&quot;, &quot;&quot;));
+                e[&quot;callerName&quot;] = usageName.Length &gt; 0 ? usageName : (context.Subscription != null ? context.Subscription.Name : (string)v.GetValueOrDefault(&quot;callerName&quot;, &quot;&quot;));
                 e[&quot;model&quot;] = model.Length &gt; 64 ? model.Substring(0, 64) : model;
                 e[&quot;status&quot;] = context.Response == null ? 0 : context.Response.StatusCode;
                 e[&quot;errorSource&quot;] = context.LastError == null ? &quot;&quot; : context.LastError.Source;
