@@ -146,7 +146,10 @@ Fetch the keys with
   well, 0.x joins both into `x-api-key: KEY, KEY` (and a placeholder
   `api_key` into `placeholder, KEY`). The form that is right on every version
   is `Anthropic(auth_token="placeholder", default_headers={"x-api-key": key})`
-  (checked offline against 0.111.0, 0.116.0, 2.0.0 and 2.9.0). First seen
+  (checked offline against 0.111.0, 0.116.0, 2.0.0 and 2.9.0, also with
+  `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` exported: the key header is
+  still `KEY` alone, and the explicit `auth_token` replaces
+  `ANTHROPIC_AUTH_TOKEN`). First seen
   2026-11-16, from a user who installed the SDK with `pip` instead of using
   the locked pixi environment:
   - `azure-openai-service-api` — path `""` (root), OpenAI Chat/Completions,

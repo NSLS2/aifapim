@@ -68,7 +68,9 @@ print(response.choices[0].message.content)
 > `Authorization: Bearer`, which the gateway does not read, so the call fails
 > with `401 Access denied due to missing subscription key`. Older SDKs send
 > `api_key=` as `x-api-key`, and combined with `default_headers` they join
-> both into `KEY, KEY`; `auth_token` works on all versions.
+> both into `KEY, KEY`; `auth_token` works on all versions. With `auth_token`
+> set, `ANTHROPIC_API_KEY` is ignored, and `ANTHROPIC_AUTH_TOKEN` is replaced
+> by the placeholder.
 
 ```python
 from anthropic import Anthropic
