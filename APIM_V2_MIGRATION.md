@@ -134,7 +134,10 @@ Private endpoints in subnet `pe` -> existing Foundry accounts (East US, East US 
 - **Host name and certificate on Front Door.** The gateway keeps no custom
   domain (`apimGatewayHostName` stays empty). Front Door reads the certificate
   from Key Vault with its own identity (Key Vault Secrets User), and accepts
-  only RSA certificates with their intermediates. Front Door's endpoint is named
+  only RSA certificates with their intermediates. The gateway identity gets no
+  vault role (`grantGatewayVaultAccess` is false); a custom domain on the
+  gateway itself would need it set in a deployment before the one that sets
+  `apimGatewayHostName`. Front Door's endpoint is named
   like the gateway (`apim-dev-<unique>`), because `test-models.py` expects the
   host name to contain `dev`.
 - **The gateway is deployed in steps** (the companion runbook has the commands).

@@ -7,9 +7,11 @@
 // its own private DNS zones, and the roles the gateway identity needs on them. The policies,
 // APIs and products are rendered as in aifapim.bicep (the section below is the same text).
 //
-// Deploy in two steps. The system-assigned identity needs the Key Vault Secrets User role
-// before the gateway can read its certificate, and it exists only once the instance does: the
-// first deployment leaves apimGatewayHostName empty and grants the role, a second one sets it.
+// A custom domain on the gateway itself (apimGatewayHostName) takes two deployments. The
+// system-assigned identity needs the Key Vault Secrets User role before the gateway can read
+// its certificate, and it exists only once the instance does: the first deployment sets
+// grantGatewayVaultAccess and leaves apimGatewayHostName empty, a second one sets the host name.
+// With the host name on Front Door the gateway reads no certificate: leave both unset.
 //
 // Not in this template yet: the request body log and the Event Hub (see the plan).
 
@@ -37,6 +39,9 @@ param alertEmailAddress string
 
 @description('Custom gateway (proxy) hostname (e.g., api.example.com). Leave empty to skip.')
 param apimGatewayHostName string = ''
+
+@description('Give the gateway identity Key Vault Secrets User on keyVaultName. Only a custom domain on the gateway itself (apimGatewayHostName) needs it, and it must be granted by an earlier deployment than the one that sets the host name.')
+param grantGatewayVaultAccess bool = false
 
 @description('Key Vault secret name for the gateway TLS certificate.')
 param gatewayKeyVaultSecretName string = ''
@@ -488,7 +493,7 @@ resource apimServiceRef 'Microsoft.ApiManagement/service@2024-05-01' existing = 
 // The system-assigned identity exists only once APIM does, so this role is written after the
 // APIM module. Only a custom domain on the gateway itself needs it (see the header); with the
 // host name on Front Door the gateway reads no certificate and gets no role on the vault.
-module kvAccess 'modules/keyvault-role.bicep' = if (!empty(keyVaultName) && !empty(apimGatewayHostName)) {
+module kvAccess 'modules/keyvault-role.bicep' = if (!empty(keyVaultName) && grantGatewayVaultAccess) {
   name: 'kvSecretUserForApimSystem'
   scope: resourceGroup(keyVaultResourceGroup)
   params: {
