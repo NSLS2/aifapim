@@ -792,6 +792,7 @@ modules/
   api-management-private.bicep  # APIM instance, custom domains, CA certs
   api-management-v2.bicep       # APIM Standard v2 instance (aifapimv2.bicep): outbound integration subnet, custom domain
   foundry-private-endpoint.bicep # Private endpoint and DNS zone group for an existing Foundry account in another resource group
+  front-door.bicep              # Front Door Premium over Private Link in front of the v2 gateway: endpoint, WAF allow-list, custom domain and certificate (aifapimv2.bicep)
   api.bicep                     # All five inference APIs, the catalog API, backends, product, diagnostics
   app-insights.bicep            # Application Insights
   cognitive-services-role.bicep # Cognitive Services / AI User RBAC for APIM system identity
