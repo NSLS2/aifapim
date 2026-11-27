@@ -410,6 +410,7 @@ module eventHub 'modules/event-hub.bicep' = {
     subnetId: privateEndpointSubnetId
     privateDnsZoneId: eventHubPrivateDnsZone.outputs.zoneId
     allowedIps: eventHubAllowedIps
+    allowTrustedServices: true
     consumerGroupName: 'alloy-loki'
   }
 }
@@ -513,27 +514,17 @@ module frontDoorKeyVaultAccess 'modules/keyvault-role.bicep' = if (!empty(keyVau
   }
 }
 
-// The built-in all-access subscription (master) is scoped to the whole service, so its keys skip
-// every product policy, including the Entra token check of the agent products. Suspending it is
-// the one change APIM accepts for it, and the template keeps it suspended. Without tracing, as
-// for every key.
-resource masterSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
-  parent: apimServiceRef
-  name: 'master'
-  properties: {
-    displayName: 'Built-in all-access subscription'
-    scope: '${apimServiceRef.id}/'
-    state: 'suspended'
-    allowTracing: false
-  }
-}
-
 resource apimServiceRef 'Microsoft.ApiManagement/service@2024-05-01' existing = {
   name: apiManagementServiceName
   dependsOn: [
     apiManagement
   ]
 }
+
+// The built-in all-access subscription (master) is scoped to the whole service, so its keys skip
+// every product policy, including the Entra token check of the agent products. A template cannot
+// suspend it: APIM answers a write with "Can't modify global subscription". It is suspended by
+// hand after the first deployment (docs/apim-v2-migration.md in aifapim-config).
 
 // The system-assigned identity exists only once APIM does, so this role is written after the
 // APIM module. Only a custom domain on the gateway itself needs it (see the header); with the

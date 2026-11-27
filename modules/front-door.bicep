@@ -43,7 +43,7 @@ param defaultRuleSetVersion string = '2.2'
 @description('Version of the Microsoft bot manager rule set.')
 param botManagerRuleSetVersion string = '1.1'
 
-@description('Version of the HTTP DDoS rule set. It only logs.')
+@description('Version of the HTTP DDoS rule set. Its rules log by default, and the rule set takes no action of its own.')
 param ddosRuleSetVersion string = '1.0'
 
 param tags object = {}
@@ -116,7 +116,7 @@ resource waf 'Microsoft.Network/frontDoorWebApplicationFirewallPolicies@2024-02-
       managedRuleSets: [
         { ruleSetType: 'Microsoft_DefaultRuleSet', ruleSetVersion: defaultRuleSetVersion, ruleSetAction: 'Block' }
         { ruleSetType: 'Microsoft_BotManagerRuleSet', ruleSetVersion: botManagerRuleSetVersion }
-        { ruleSetType: 'Microsoft_HTTPDDoSRuleSet', ruleSetVersion: ddosRuleSetVersion, ruleSetAction: 'Log' }
+        { ruleSetType: 'Microsoft_HTTPDDoSRuleSet', ruleSetVersion: ddosRuleSetVersion }
       ]
     }
     customRules: {

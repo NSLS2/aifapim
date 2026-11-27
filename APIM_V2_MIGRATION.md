@@ -334,11 +334,14 @@ Dev always goes before prod.
   request (`SecurityEvent_Fragment.xml`, written by the service-level policy
   `Global_Policy.xml`: after every response and in on-error, so refused
   requests are in it), a consumer group `alloy-loki` for the log reader (plan:
-  pull into Loki with Alloy), public access Disabled unless
-  `eventHubAllowedIps` is set (dev: the NAT pool)
+  pull into Loki with Alloy), trusted-service access on (APIM's management
+  plane tests the logger connection from outside the VNet and is refused
+  without it, tried on dev 2026-11-27), reachable from outside the VNet only
+  from `eventHubAllowedIps` (dev: the NAT pool)
 - [x] WAF managed rules in the Front Door template: default rule set 2.2 in
-  Prevention, bot manager 1.1, HTTP DDoS 1.0 log only; request body check by
-  `wafInspectRequestBody` (dev: on)
+  Prevention, bot manager 1.1, HTTP DDoS 1.0 (its rules log by default; the rule
+  set takes no action of its own); request body check by `wafInspectRequestBody`
+  (dev: on)
 - [ ] Settings for the prod gateway (network 10.10.0.0/16)
 - [ ] Key copy script (same key values) and the scripts that name the APIM
   resource (companion), v2 entries in `beamline-keys.py`, `test-models.py` and
@@ -354,8 +357,7 @@ Dev always goes before prod.
   again with the `int` subnet
 - [x] Deploy the gateway in steps (bootstrap, approve Front Door, close public
   access, custom domain on Front Door); done 2026-11-26 and 2026-11-27
-- [x] Suspend the built-in `master` subscription by hand; the gateway template
-  now declares it suspended
+- [x] Suspend the built-in `master` subscription by hand
 - [ ] CanNotDelete lock on the resource group
 
 ### Phase 3: test dev
@@ -467,13 +469,14 @@ consider v2. Items are checked in dev (phase 3) and again in prod.
 
 Decided:
 
-- [x] Built-in all-access subscription (`master`) suspended, tracing off. Its
-  keys skip every product policy, including the Entra token check of the agent
-  products. `aifapimv2.bicep` declares it with `state: 'suspended'`; APIM
-  refuses to change anything else on it ("Can't modify global subscription"),
-  and the check script is run after each deployment. To settle on dev: whether
-  writing it again gives it new keys (a new stack's first deployment cannot
-  start it suspended, so the first deployment sets the state once)
+- [x] Built-in all-access subscription (`master`) suspended by hand after the
+  first deployment (a template cannot: APIM answers a write with "Can't modify
+  global subscription", and a template that declares it fails with "Subscription
+  scope should be one of '/apis', '/apis/{apiId}', '/products/{productId}'",
+  tried on dev 2026-11-27); checked on dev. Its keys skip every
+  product policy, including the Entra token check of the agent products.
+  Nothing in a template keeps it suspended, so the check script is run again
+  after each deployment and before prod is announced.
 - [x] `allowTracing: false` on every subscription the key tooling makes
   (`apim-subscriptions.bicep`, companion repository); the gateway template makes
   none. Checked on dev: `master` and `svc-v2-smoke` both read false. A
@@ -490,10 +493,11 @@ Network:
 - [x] WAF allow-list at Front Door on `SocketAddr`; the policies' allow-list and
   product checks read the same `clientAddress`
 - [ ] Deny outbound Internet on the `int` subnet, once the flows are known
-- [x] WAF managed rules (default 2.2, bot manager 1.1, HTTP DDoS 1.0 log only)
-  in the template. To settle on dev: how much of a body the WAF inspects,
-  whether Premium includes the managed rules at no extra charge (the Front Door
-  bill will show), and which of the prompts in the tests it blocks
+- [x] WAF managed rules (default 2.2, bot manager 1.1, HTTP DDoS 1.0, whose
+  rules log by default) in the template. To settle on dev: how much of a body
+  the WAF inspects, whether Premium includes the managed rules at no extra
+  charge (the Front Door bill will show), and which of the prompts in the tests
+  it blocks
 - [ ] Decide the WAF body check: on only if real prompts (code, SQL, shell)
   pass; if not, exclusions or off. Prod follows what dev shows
 - [ ] DDoS protection: decide what Front Door Premium and the HTTP DDoS rule set

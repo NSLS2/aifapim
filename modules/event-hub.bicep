@@ -14,13 +14,16 @@ param privateDnsZoneId string
 @description('Region of the private endpoint. Must be the region of the subnet virtual network.')
 param privateEndpointLocation string = location
 
-@description('Addresses and ranges allowed to reach the public endpoint, for a reader outside the VNet. Empty keeps public network access Disabled. Traffic through the private endpoint is not affected.')
+@description('Addresses and ranges allowed to reach the public endpoint, for a reader outside the VNet. Empty (and no trusted services) keeps public network access Disabled. Traffic through the private endpoint is not affected.')
 param allowedIps array = []
+
+@description('Let trusted Azure services past the firewall. API Management needs it: its management plane tests the connection from outside the VNet when it creates a logger. The gateway itself sends through the private endpoint.')
+param allowTrustedServices bool = false
 
 @description('Consumer group to create for a reader. Empty creates none ($Default always exists).')
 param consumerGroupName string = ''
 
-var publicAccess = empty(allowedIps) ? 'Disabled' : 'Enabled'
+var useRules = !empty(allowedIps) || allowTrustedServices
 
 resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
   name: eventHubNamespaceName
@@ -33,7 +36,7 @@ resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
   properties: {
     disableLocalAuth: true
     minimumTlsVersion: '1.2'
-    publicNetworkAccess: publicAccess
+    publicNetworkAccess: useRules ? 'Enabled' : 'Disabled'
   }
 }
 
@@ -47,12 +50,13 @@ resource consumerGroup 'Microsoft.EventHub/namespaces/eventhubs/consumergroups@2
   name: consumerGroupName
 }
 
-resource networkRules 'Microsoft.EventHub/namespaces/networkRuleSets@2024-01-01' = if (!empty(allowedIps)) {
+resource networkRules 'Microsoft.EventHub/namespaces/networkRuleSets@2024-01-01' = if (useRules) {
   parent: eventHubNamespace
   name: 'default'
   properties: {
     publicNetworkAccess: 'Enabled'
     defaultAction: 'Deny'
+    trustedServiceAccessEnabled: allowTrustedServices
     ipRules: [for ip in allowedIps: { ipMask: ip, action: 'Allow' }]
   }
 }
