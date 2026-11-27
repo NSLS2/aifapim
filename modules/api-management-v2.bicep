@@ -28,6 +28,9 @@ param skuName string = 'StandardV2'
 @description('The number of units.')
 param skuCount int = 1
 
+@description('Spread the unit over availability zones. Only an instance that is created with it has it: it cannot be added or removed later, and the property is sent only when true, so an existing instance is not touched. The create fails if the region cannot place it zone redundant.')
+param zoneRedundant bool = false
+
 @description('Whether the gateway answers on its public address. Disable it only once a private endpoint connection exists (Front Door Private Link): APIM refuses to disable it before then, and a deployment that leaves it out resets it to Enabled.')
 @allowed([
   'Enabled'
@@ -82,7 +85,9 @@ resource aiParent 'Microsoft.Insights/components@2020-02-02-preview' existing = 
   name: aiName
 }
 
-resource apiManagementService 'Microsoft.ApiManagement/service@2024-05-01' = {
+// zoneRedundant exists from API version 2025-03-01-preview, so the service resource is on the
+// newest preview version in every stack (its child resources stay on 2024-05-01).
+resource apiManagementService 'Microsoft.ApiManagement/service@2025-09-01-preview' = {
   name: serviceName
   location: location
   tags: tags
@@ -93,7 +98,7 @@ resource apiManagementService 'Microsoft.ApiManagement/service@2024-05-01' = {
   identity: {
     type: 'SystemAssigned'
   }
-  properties: {
+  properties: union({
     publisherName: publisherName
     publisherEmail: publisherEmail
     virtualNetworkType: 'External'
@@ -106,7 +111,7 @@ resource apiManagementService 'Microsoft.ApiManagement/service@2024-05-01' = {
     apiVersionConstraint: {
       minApiVersion: '2021-08-01'
     }
-  }
+  }, zoneRedundant ? { zoneRedundant: true } : {})
 }
 
 // APIM keeps a logger's identityClientId in a secret named value and writes a new one on

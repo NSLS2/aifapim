@@ -28,6 +28,13 @@ param immutabilityPeriodDays int = 146000
 @description('Whether this template creates and updates the immutability policy. Set to false once the policy has been locked: a locked policy can only be extended, so redeploying it unchanged could fail.')
 param manageImmutabilityPolicy bool = true
 
+@description('SKU of the storage account. Standard_ZRS keeps the blobs through the loss of a zone. It is set when the account is created: an existing account is not converted by a deployment.')
+@allowed([
+  'Standard_LRS'
+  'Standard_ZRS'
+])
+param storageSkuName string = 'Standard_LRS'
+
 @description('Move blobs to the Cold tier this many days after creation.')
 @minValue(1)
 param coldAfterDays int = 7
@@ -45,7 +52,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   tags: tags
   kind: 'StorageV2'
   sku: {
-    name: 'Standard_LRS'
+    name: storageSkuName
   }
   properties: {
     accessTier: 'Hot'

@@ -40,7 +40,7 @@ request as work lands.
 | Front Door (`modules/front-door.bicep`) | Dev: Premium profile, endpoint, WAF, Private Link approved, custom domain `aifapimv2-dev.nsls2.bnl.gov` validated and serving the RSA certificate chain |
 | DNS records | Not yet: the CNAME to the Front Door endpoint is to be requested; test on the endpoint's `azurefd.net` name |
 | Event Hub and security events (`modules/event-hub.bicep`, `modules/security-events.bicep`) | Dev: deployed 2026-11-27; one JSON event per request from the service-level policy, over a private endpoint, no prompt text. Hub messages match gateway requests by count; the content of an event is not read yet |
-| Request body log | Not in the v2 template yet |
+| Request body log | In the template (`requestBodyLogging`), on in the dev settings; not deployed yet |
 | Prod stack (`aifapimv2`) | Not started |
 | Agent client in the logs and token metrics | Merged from `main`; not tried on v2 |
 
@@ -54,10 +54,15 @@ service and the configuration is replicated. Reasons to move:
 - The Anthropic logging gaps (completion tokens always 0, empty model name for
   streaming, missing prompts) may be fixed on v2. Microsoft lists the Anthropic
   Messages API as supported in the v2 tiers. This is to be measured in dev.
-- Standard v2 has an SLA and several units (up to 10). For zones Microsoft's
-  pages disagree (the reliability page lists zone redundancy for Standard v2,
-  the tier comparison does not), so zones are not relied on; the setting can
-  only be chosen when the instance is created, so check it then.
+- Standard v2 has an SLA and several units (up to 10). Zone redundancy for
+  Standard v2 was announced on 2026-08-27: `zoneRedundant: true` on the
+  service, from API version 2025-03-01-preview (Microsoft's reliability page
+  has not caught up). It can only be chosen when the instance is created, and
+  the create fails if the region cannot place it. One unit spreads over two
+  zones. Prod sets it; dev was created without it. Both stacks use the newest
+  preview API version for the service resource, so they differ only in this
+  property. In prod the request log storage accounts are `Standard_ZRS`; the
+  Flex plan is not zone redundant (it would keep two instances always running).
 
 What v2 does not have (Microsoft, 2026-11): multi-region, backup and restore,
 Git configuration, direct management API access, cipher configuration, the
@@ -327,9 +332,12 @@ Dev always goes before prod.
   builds with it too; run a what-if on Classic dev before any Classic redeploy
 - [x] Settings for the dev gateway (`aifapimv2-dev.bicepparam`)
 - [x] Agent client tracking merged from `main`
-- [ ] Request body log in the v2 template (its own storage and workspace per
-  stack; its storage private endpoint goes in `pe`, not in the delegated `int`
-  subnet)
+- [x] Request body log in the v2 template (its own storage and workspace per
+  stack; its storage private endpoint is in `pe`, the function in a `reqlog`
+  subnet that the template adds in 10.x.3.0/24). First deployment with
+  `requestLogManageImmutabilityPolicy = true` (a new account has no policy),
+  then `false`: a rewrite of the policy hung a Classic deployment for 3 h 26 min.
+  Not deployed yet
 - [x] Event Hub with a private endpoint in `pe` and a security event per
   request (`SecurityEvent_Fragment.xml`, written by the service-level policy
   `Global_Policy.xml`: after every response and in on-error, so refused
@@ -440,7 +448,9 @@ To do:
   through Hermes, as on Classic; a caller outside the allowed range (needs a
   source address outside the NAT pool)
 - [ ] Hermes egress addresses on the prod WAF list
-- [ ] Outbound flows, then add the deny-Internet rule on the `int` subnet
+- [ ] Outbound flows, then add the deny-Internet rule on the `int` subnet. It
+  needs an allow for 443 to the `pe` subnet first (the request body log, the
+  Event Hub and the Foundry accounts), or the body log stops without an error
 - [ ] CPU and memory of one unit under calls that reach a model (the burst
   above did not)
 - [ ] Request log, certificate renewal, expiry alert
@@ -571,8 +581,8 @@ Governance and recovery:
 - [ ] Decide request and response validation: a cap on the request body size
   and removal of backend headers from responses
 - [ ] Later: a real per-key ceiling (tokens per minute is 10,000,000 today, so
-  it limits nothing) and zone redundancy for prod (reliability pages disagree
-  for Standard v2; not for dev)
+  it limits nothing)
+- [ ] Zone redundancy for prod (`zoneRedundant`, set when the instance is created)
 - [ ] The v2 tiers have no backup and restore: the configuration is this
   repository, and the subscription keys are kept as an encrypted snapshot
   (`rotate-keys.py snapshot` in the companion repository) after every change

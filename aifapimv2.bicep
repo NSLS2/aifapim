@@ -14,7 +14,8 @@
 // With the host name on Front Door the gateway reads no certificate: leave both unset.
 //
 // The Event Hub takes one security event per request (apim_policies/SecurityEvent_Fragment.xml).
-// Not in this template yet: the request body log (see the plan).
+// The request body log (requestBodyLogging) is the one of aifapim.bicep: write-once blobs, a
+// function and a separate workspace, in this network.
 
 @description('Azure region of the gateway and of the private endpoints. It must be the region of the virtual network.')
 param location string = resourceGroup().location
@@ -152,6 +153,42 @@ param publicNetworkAccess string
 @description('Model deployments of each region, as in the Classic settings: the first list is the secondary region (eastus), the second the primary (eastus2). Only the names are used: they decide which models fail over, and which start on the secondary.')
 param modelDeployments array
 
+@description('Spread the gateway over availability zones, and keep the request body storage in zone redundant storage (Standard_ZRS). Set it only for a new stack: an existing gateway cannot be changed, and an existing storage account is not converted. Leave it false for the dev stack, which was created without.')
+param zoneRedundant bool = false
+
+@description('Store the raw body of every POST to the inference APIs in a write-once (WORM) blob, and load a searchable copy into a separate Log Analytics workspace (see aifapim.bicep). The built-in LLM log drops the prompt of Claude requests whose system field is a list of blocks.')
+param requestBodyLogging bool = false
+
+@description('CIDR of the subnet this template adds to the virtual network for the request log function (at least a /27, free in the network). Required when requestBodyLogging is true.')
+param requestLogSubnetIPPrefix string = ''
+
+@description('Object ID of the Entra group that may read the stored request bodies (Storage Blob Data Reader and Log Analytics Reader). Leave empty to skip the assignments.')
+param requestLogReaderGroupObjectId string = ''
+
+@description('Public IPv4 addresses or CIDR ranges allowed to read the request body blobs from outside the VNet. Empty means private endpoint access only.')
+param requestLogReaderIps array = []
+
+@description('Maximum number of request log function instances. Bounds the load on the ingestion endpoint.')
+@minValue(1)
+@maxValue(100)
+param requestLogMaxInstances int = 4
+
+@description('Days of the time-based immutability (WORM) policy on the request body container. 146000 days (about 400 years) is the Azure maximum. The policy is created unlocked; locking it cannot be undone and is a separate step.')
+@minValue(1)
+@maxValue(146000)
+param requestLogImmutabilityDays int = 146000
+
+@description('Whether the template creates and updates the immutability policy on the request body container. True for the first deployment, which creates it (a new account has none); false afterwards, and always false once the policy has been locked, because a locked policy can only be extended and a rewrite of the policy once hung a deployment for hours.')
+param requestLogManageImmutabilityPolicy bool = true
+
+@description('Move request body blobs to the Cold tier after this many days.')
+@minValue(1)
+param requestLogColdAfterDays int = 7
+
+@description('Move request body blobs to the Archive tier after this many days.')
+@minValue(2)
+param requestLogArchiveAfterDays int = 90
+
 
 // Client address. Behind Front Door the gateway's connecting address is an internal one, so the
 // policies read the address Front Door saw, X-Azure-SocketIP. Front Door overwrites that header when
@@ -209,14 +246,17 @@ var primaryModelNames = length(modelDeployments) > 1 ? map(modelDeployments[1], 
 var secondaryOnlyModelList = '|${join(map(filter(modelDeployments[0], d => !contains(primaryModelNames, d.name)), d => d.name), '|')}|'
 
 // The inference policies carry the marker comment below in <inbound>. It is replaced by the
-// usage trace when usageTrace is true, and by nothing otherwise. The request body log of
-// aifapim.bicep is not in the v2 template yet. Applied last, so the fragment is not touched
-// by the other substitutions.
+// usage trace when usageTrace is true, then the request body log when requestBodyLogging is
+// true, and by nothing otherwise. Applied last, so the fragments are not touched by the other
+// substitutions.
 var requestLogMarker = '<!-- __REQUEST_LOG__ -->'
+var requestLogStorageName = 'stllmreq${unique}'
+var requestLogContainerName = 'llm-requests'
+var requestLogXml = requestBodyLogging ? replace(replace(loadTextContent('apim_policies/RequestBodyLog_Fragment.xml'), '__REQUEST_LOG_BLOB_ENDPOINT__', 'https://${requestLogStorageName}.blob.${environment().suffixes.storage}'), '__REQUEST_LOG_CONTAINER__', requestLogContainerName) : ''
 // The usage trace (apim_policies/UsageTrace_Fragment.xml) goes in at the marker when
 // usageTrace is true.
 var usageTraceXml = usageTrace ? loadTextContent('apim_policies/UsageTrace_Fragment.xml') : ''
-var inboundLogXml = usageTraceXml
+var inboundLogXml = '${usageTraceXml}${requestLogXml}'
 var openApiXml = replace(replace(replace(replace(replace(replace(replace(replace(v2Policy(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml')), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
 
 // Anthropic API policy (multi-region retry variant).
@@ -463,6 +503,7 @@ module apiManagement 'modules/api-management-v2.bicep' = {
     publisherName: apiManagementPublisherName
     publisherEmail: apiManagementPublisherEmail
     skuCount: apiManagementSkuCount
+    zoneRedundant: zoneRedundant
     publicNetworkAccess: publicNetworkAccess
     subnetResourceId: integrationSubnetId
     aiName: applicationInsightsName
@@ -661,6 +702,38 @@ module aiUserRoles 'modules/cognitive-services-role.bicep' = [for (account, i) i
   }
 }]
 
+// Request body log: write-once blobs, a function that loads them into a separate Log Analytics
+// workspace, and the roles between them (modules/request-log.bicep). It adds the reqlog subnet to
+// the virtual network, and a private link scope for Azure Monitor with its private DNS zones, so
+// the gateway's Application Insights logger also goes over the private path.
+module requestLog 'modules/request-log.bicep' = if (requestBodyLogging) {
+  name: 'request-log'
+  params: {
+    uniqueSuffix: unique
+    location: location
+    tags: tags
+    vnetName: vnetName
+    vnetId: vnet.id
+    privateEndpointSubnetId: privateEndpointSubnetId
+    functionSubnetPrefix: requestLogSubnetIPPrefix
+    dataStorageAccountName: requestLogStorageName
+    containerName: requestLogContainerName
+    readerGroupObjectId: requestLogReaderGroupObjectId
+    readerIps: requestLogReaderIps
+    apimPrincipalId: apiManagement.outputs.apiManagementIdentityPrincipalId
+    auditWorkspaceId: logAnalyticsWorkspace.outputs.id
+    applicationInsightsName: applicationInsightsName
+    applicationInsightsId: applicationInsights.outputs.aiId
+    applicationInsightsConnectionString: applicationInsights.outputs.connectionString
+    storageSkuName: zoneRedundant ? 'Standard_ZRS' : 'Standard_LRS'
+    maximumInstanceCount: requestLogMaxInstances
+    immutabilityPeriodDays: requestLogImmutabilityDays
+    manageImmutabilityPolicy: requestLogManageImmutabilityPolicy
+    coldAfterDays: requestLogColdAfterDays
+    archiveAfterDays: requestLogArchiveAfterDays
+  }
+}
+
 resource protect 'Microsoft.Authorization/locks@2020-05-01' = if (lockResourceGroup) {
   name: 'protect-${resourceGroup().name}'
   properties: {
@@ -672,3 +745,7 @@ resource protect 'Microsoft.Authorization/locks@2020-05-01' = if (lockResourceGr
 output apiManagementName string = apiManagementServiceName
 output frontDoorEndpointHostName string = frontDoor.outputs.endpointHostName
 output apiManagementDefaultHostName string = apiManagement.outputs.apiManagementDefaultHostName
+output requestLogFunctionApp string = requestBodyLogging ? requestLog!.outputs.functionAppName : ''
+output requestLogStorageAccount string = requestBodyLogging ? requestLog!.outputs.dataStorageAccountName : ''
+output requestLogContainer string = requestBodyLogging ? requestLog!.outputs.containerName : ''
+output requestLogWorkspace string = requestBodyLogging ? requestLog!.outputs.workspaceName : ''
