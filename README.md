@@ -203,8 +203,9 @@ flux2 = base64.b64decode(response.json()["data"][0]["b64_json"])
 Image models are billed and limited per image, not per token: the token
 limit and token metric policies are skipped for `/images/` requests, and the
 policies emit an `Image Count` metric instead (same namespace and dimensions
-as the token metrics). They are not listed in `GET /catalog`, which holds
-chat models only. `GET /catalog/images` lists them, and
+as the token metrics). They are not listed in `GET /catalog/chat`, which holds
+chat models only (`GET /catalog` returns the same list but is deprecated).
+`GET /catalog/images` lists them, and
 `GET /catalog/embeddings` lists the embedding models, and
 `GET /catalog/transcriptions` lists the speech-to-text models. Each image entry
 gives the gateway route to use, because the routes differ between model
@@ -426,7 +427,7 @@ Pay particular attention to:
 ```text
 aifapim.bicep                   # Main deployment orchestrator
 aifapim.example.bicepparam      # Parameter file template — copy and customize per environment
-model-catalog.example.json      # Example GET /catalog body, loaded by the example parameter file
+model-catalog.example.json      # Example GET /catalog/chat body, loaded by the example parameter file
 llm-token-usage-workbook.bicep  # Azure Monitor workbook for LLM token usage analytics
 modules/
   aif.bicep                     # AI Foundry (AIServices) account + private endpoint
@@ -462,7 +463,7 @@ api_definitions/
   AzureAnthropic_OpenAPI.json            # Anthropic OpenAPI spec imported into APIM
   BlackForestLabs_OpenAPI.json           # FLUX.2-pro (Black Forest Labs route) OpenAPI spec
   MAI_Image_OpenAPI.json                 # MAI image OpenAPI spec
-  Catalog_OpenAPI.json                   # GET /catalog, /catalog/images, /catalog/embeddings and /catalog/transcriptions static model lists
+  Catalog_OpenAPI.json                   # GET /catalog/chat (and deprecated /catalog), /catalog/images, /catalog/embeddings and /catalog/transcriptions static model lists
 examples/
   test-apim.py                  # Smoke-test against APIM using a subscription key
   opencode.json                 # Ready-to-use OpenCode configuration

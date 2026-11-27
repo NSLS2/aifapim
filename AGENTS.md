@@ -191,9 +191,15 @@ Fetch the keys with
     Output is always one PNG; width and height are at least 768 with a total of
     at most 2,359,296 pixels. Grouped under `apimProductName` product and the
     service products.
-  - `catalog-api` — path `catalog`, `GET /catalog`, `GET /catalog/images`,
-    `GET /catalog/embeddings` and `GET /catalog/transcriptions`.
-    `/catalog` returns a static
+  - `catalog-api` — path `catalog`, `GET /catalog/chat`, `GET /catalog/images`,
+    `GET /catalog/embeddings`, `GET /catalog/transcriptions` and
+    `GET /catalog/routers`. `GET /catalog` is the old name of
+    `/catalog/chat`: it returns the same body, is marked deprecated in the spec
+    (operation id `getCatalog`, the chat one is `getChatCatalog`) and is removed
+    once the gateway log shows no caller of `getCatalog` (query
+    `ApiManagementGatewayLogs` for the two operation ids and
+    `summarize count() by OperationId, bin(TimeGenerated, 1d)`).
+    `/catalog/chat` returns a static
     JSON array of chat-LLM models with `id`, `name`, `provider`, `context`,
     and `output` fields baked in at deploy time from `model-catalog.json`
     (in the `aifapim-config` repo, passed as the `catalogJson` param).
@@ -202,7 +208,7 @@ Fetch the keys with
     `provider`, `create`, `edit`, `routes` (the gateway route for each
     operation, because the families differ), `residency` and `retires`. It is
     separate on purpose: ansible builds each workstation's OpenCode model
-    list from every `OpenAI` entry of `/catalog`, so an image model there would
+    list from every `OpenAI` entry of `/catalog/chat`, so an image model there would
     be offered as a chat model and fail. The policy picks the body by
     operation id (`getImageCatalog`).
     `/catalog/embeddings` returns the embedding models, baked in from
@@ -219,7 +225,7 @@ Fetch the keys with
     `max_file_mb`,
     `timestamps`, `speaker_labels`, `residency`, `retires` and `notes`. It is
     separate for the same reason: these models have provider `OpenAI`, so in
-    `/catalog` they would be offered as chat models and fail. Operation id
+    `/catalog/chat` they would be offered as chat models and fail. Operation id
     `getTranscriptionCatalog`; empty (`[]`) where none is deployed.
     `/catalog/routers` returns the model routers, baked in from
     `router-catalog.json` (the `routerCatalogJson` param): `id`, `name`,
@@ -240,9 +246,9 @@ Fetch the keys with
     **Route composition note:** APIM constructs the gateway route as
     `<API path> + <operation urlTemplate>`. The catalog API uses
     `path = 'catalog'` and `urlTemplate = '/'`, giving the effective route
-    `/catalog`; the `/images` and `/embeddings` operations give
-    `/catalog/images`, `/catalog/embeddings`, `/catalog/transcriptions` and
-    `/catalog/routers`. Do **not**
+    `/catalog`; the `/chat`, `/images` and `/embeddings` operations give
+    `/catalog/chat`, `/catalog/images`, `/catalog/embeddings`,
+    `/catalog/transcriptions` and `/catalog/routers`. Do **not**
     put `/catalog` in the OpenAPI operation path — that doubles the segment to
     `/catalog/catalog` and produces a 404.
 - **Products** (the same on dev and prod). A key's product decides which
@@ -1128,7 +1134,7 @@ python examples/test-apim.py
    # Catalog endpoint — use a key scoped to the aifapim-catalog product.
    # Issue the key first: see aifapim-config/catalog-key.sh.
    export CATALOG_KEY=<catalog-product-key>
-   curl -sS "https://$AIFAPIM_HOST/catalog" \
+   curl -sS "https://$AIFAPIM_HOST/catalog/chat" \
      -H "x-api-key: $CATALOG_KEY" | jq '.[].id'
 
    # Verify the catalog key cannot call inference (must return 401):
@@ -1137,7 +1143,8 @@ python examples/test-apim.py
    ```
 
    The inference listing routes must return 200 with a non-empty `data` array.
-   `/catalog` must return 200 with a non-empty JSON array of model objects.
+   `/catalog/chat` (and the deprecated `/catalog`) must return 200 with a
+   non-empty JSON array of model objects.
    The catalog key against any inference route must return 401 (not 403 —
    the key is valid but not in the inference product's subscription list).
    Foundry intentionally does not proxy `/anthropic/v1/models` (returns 404

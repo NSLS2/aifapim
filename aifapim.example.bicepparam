@@ -99,7 +99,7 @@ param allowedClientIps = [
 ]
 
 // ---- Model catalog ----
-// JSON array served by GET /catalog (id/name/provider/context/output per
+// JSON array served by GET /catalog/chat (id/name/provider/context/output per
 // chat-LLM model), baked into the catalog policy at deploy time. Replace the
 // example with a catalog that matches modelDeployments below; context and
 // output windows must come from the vendor model cards.

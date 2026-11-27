@@ -8,10 +8,12 @@
     <!-- Run the product-level policy: without <base /> a product's own rule (the
          NAT-pool lock on the internal service product) would not apply here. -->
     <base />
-    <!-- Static return-response: no backend call is made. Three bodies are baked
+    <!-- Static return-response: no backend call is made. Five bodies are baked
          in at deploy time by aifapim.bicep, each replacing the sentinel in its
          own set-body element with the XML-escaped JSON: the chat model catalog
-         (model-catalog.json) for GET /catalog, the image model catalog
+         (model-catalog.json) for GET /catalog/chat and, until callers have
+         moved, for the deprecated GET /catalog (the otherwise branch answers
+         both getChatCatalog and getCatalog), the image model catalog
          (image-catalog.json) for GET /catalog/images, the embedding model
          catalog (embedding-catalog.json) for GET /catalog/embeddings, the
          speech-to-text catalog (transcription-catalog.json) for GET
@@ -20,7 +22,7 @@
          sentinels must appear only in set-body: they are replaced everywhere,
          and the catalog text is not valid inside an XML comment. The catalogs
          are separate on purpose: clients that build a chat model list from
-         /catalog must never see an image model, an embedding model, a
+         /catalog/chat must never see an image model, an embedding model, a
          speech-to-text model or a router (a router serves Chat Completions only). -->
     <choose>
       <when condition="@(context.Operation.Id == &quot;getImageCatalog&quot;)">
