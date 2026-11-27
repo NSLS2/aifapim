@@ -373,8 +373,12 @@ Dev always goes before prod.
 - [ ] Settings for the prod gateway (network 10.10.0.0/16)
 - [x] Key copy script (same key values) and the scripts that name the APIM
   resource (companion), v2 entries in `beamline-keys.py`, `test-models.py` and
-  `request-log/devcheck.py`. `copy-keys-to-v2.py` has not run against live APIM:
-  its preview on dev is the first test
+  `request-log/devcheck.py`. Run on dev 2026-11-27: the preview found 2 creates
+  (the two person keys) and one orphan (`svc-v2-smoke`, kept); `--apply` created
+  both, active, on the product, with the keys read back equal. Creating works on
+  v2; changing an existing key (PATCH, an expiry cleared with null) is untried.
+  Copilot's round on the script (scope string, failed read then `--prune`, expiry)
+  is fixed and tested
 - [x] `GET /catalog/chat` (the chat model list, the old `GET /catalog` marked
   deprecated and returning the same body): in `aifapim` on `main` through
   `add_catalog_chat` and on this branch; `test-models.py` checks both paths agree.
@@ -638,6 +642,32 @@ Governance and recovery:
   kept answering, so the memory metric is not trusted (the burst did not move
   it either). Also whether a second unit is billed at the secondary-unit rate.
 - The effect of deny-Internet outbound on the integrated instance (phase 3).
+- **Log Analytics is unreachable from the NSLS-II network (found 2026-11-27,
+  fix parked).** The site resolvers (`10.65.2.25` and `.26`) answer
+  `api.loganalytics.io` and `api.loganalytics.azure.com`, through
+  `api.privatelink.monitor.azure.com`, with `10.8.64.7`. That address is not in
+  our subscription (our networks are 10.0 to 10.3 and 10.11; no interface of ours
+  holds it) and is not routable from N2SN: from `grafana1` the connection times
+  out, and so does `10.8.104.68` in our own peered BNL spoke
+  (`bnl-vnet-SciNSLS2-use-prod`, peered to `bnl-vnet-hub-prod`). All four of our
+  workspaces are in our own Azure Monitor private link scopes only, so the
+  address is BNL's: very probably a BNL private link scope whose DNS zone reached
+  the NSLS-II resolvers. It showed first as Grafana saying "No data" for every
+  panel (`dial tcp 10.8.64.7:443: i/o timeout`), and it also stops `devcheck
+  latency`, `verify.sh` and `az monitor log-analytics query` from N2SN (my notes
+  show the sandbox already failed on 2026-11-24; when Grafana started is not
+  known). **Workaround in place:** `40.113.176.131 api.loganalytics.io
+  api.loganalytics.azure.com # TEMP aifapim test` in `/etc/hosts` on `grafana1`,
+  `grafana2` and `grafana3` (proved with a Grafana query probe: all workspaces
+  ok; Ansible may remove it, and it breaks if Azure moves the address).
+  **To fix:** a ticket to whoever runs the resolvers, to answer the Azure
+  Monitor private-link zones from public DNS for N2SN
+  (`privatelink.monitor.azure.com` and the `opinsights` and automation zones),
+  or to route N2SN to `10.8.64.7` and confirm that scope's query access is
+  Open. Then remove the `/etc/hosts` lines
+  (`sed -i '/# TEMP aifapim test/d' /etc/hosts`). The private blob names
+  (`*.blob.core.windows.net`) do not resolve from N2SN either, so
+  byte-for-byte body storage is checked only from a host inside the VNet.
 - Whether the Front Door custom-domain deployment (more than 15 minutes) and the
   30 minutes Front Door takes to publish a change are acceptable for the prod
   cutover.
