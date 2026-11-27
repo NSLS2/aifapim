@@ -119,8 +119,18 @@ Private endpoints in subnet `pe` -> existing Foundry accounts (East US, East US 
   `X-Forwarded-For` and `X-Azure-ClientIP` are forgeable and are not trusted.
 - **Timeouts.** Front Door waits up to 240 seconds (its maximum) for the first
   byte from the gateway and for each pause in a body, and the gateway's
-  `backendTimeoutSeconds` is 240. A non-streamed call that takes longer fails
-  with 503 (Microsoft's documented limit); a streamed call does not.
+  `backendTimeoutSeconds` is 240. Measured on dev: a non-streamed call with no
+  byte for 230 seconds fails with 500 and an HTML page ("The request timed
+  out"), not Front Door's 503. Front Door logged origin status 500 with
+  `errorInfo` NoError, and the gateway logged `ClientConnectionFailure` at
+  230.2 seconds with response code 0 and no retry: the connection in front of
+  the gateway was closed, so the platform enforces 230 seconds, not the policy.
+  A streamed call that keeps sending bytes is not affected (one survived 249
+  seconds). **Decision: leave `backendTimeoutSeconds` at 240.** A value below
+  230 would only make the gateway fail first, and the policy retries every 5xx,
+  so the client would still be cut at 230 seconds with the same HTML page.
+  Clients must stream any call that can take longer than 230 seconds. Not
+  checked: what Classic does for the same call.
 - **Host name and certificate on Front Door.** The gateway keeps no custom
   domain (`apimGatewayHostName` stays empty). Front Door reads the certificate
   from Key Vault with its own identity (Key Vault Secrets User), and accepts
@@ -336,9 +346,18 @@ Dev always goes before prod.
 
 Done:
 
-- [x] Smoke test through Front Door (`test-models.py`): 47 pass, 2 warn
-  (`claude-fable-5-2*` return empty replies, as on Classic), 1 fail
-  (`model-router`, see "Open questions")
+- [x] Smoke test through Front Door (`test-models.py`), 2026-11-27 09:3x EST:
+  48 pass, 2 warn (`claude-fable-5-2*` return empty replies, as on Classic
+  prod), 0 fail. Only the router catalog check fails: the deployed gateway still
+  serves the old 8-model catalog, and the regenerated one is not deployed yet
+- [x] 6,600 calls to `GET /catalog` at 55 requests a second for 120 seconds
+  (`afd-burst-test.py`) all returned 200: latency p50 32 ms, p95 99 ms, max
+  1.3 s. The gateway metrics for the window: CPU at most 4% (most minutes 1%),
+  memory about 0 (the metric did not move, as before), `Requests` total 6,600.
+  `/catalog` is answered by the gateway with no model call, so this is a floor,
+  not the load of real traffic
+- [x] A non-streamed call over 230 seconds fails with 500 and HTML (see
+  "Timeouts")
 - [x] Front Door to the gateway over Private Link
 - [x] Client address check: with public access Enabled, a direct call with a
   forged `X-Azure-SocketIP: 8.8.8.8` gets 401 (the header is ignored), as do
@@ -362,15 +381,14 @@ Done:
 To do:
 
 - [ ] Smoke test by the host name, once DNS exists
-- [ ] A non-streamed call over 240 seconds gets 503 (documented, not run)
 - [ ] Caller matrix: an internal key works from the NAT pool and gets 403
   through Hermes, as on Classic; a caller outside the allowed range (needs a
   source address outside the NAT pool)
 - [ ] Hermes egress addresses on the prod WAF list
 - [ ] Outbound flows, then add the deny-Internet rule on the `int` subnet
 - [ ] Anthropic token metering and the logging gaps versus Classic
-- [ ] CPU and memory of one unit, including a repeat of the 55 requests per
-  second burst
+- [ ] CPU and memory of one unit under calls that reach a model (the burst
+  above did not)
 - [ ] Request log, certificate renewal, expiry alert
 - [ ] Rollback test: bind the v2 host name on Classic dev, then move DNS to
   Classic and back
@@ -490,10 +508,13 @@ Governance and recovery:
 - Hermes egress addresses and the prod allow-list for the prod WAF.
 - Whether Front Door's access and WAF logs reach the v2 workspace, and what the
   Front Door request and transfer charges come to.
-- CPU and memory of one Standard v2 unit under a burst (`afd-burst-test.py`;
-  the peaks over the 24 hours to 2026-11-27 were 28% CPU and 5% memory, with
-  no burst test run),
-  and whether a second unit is billed at the secondary-unit rate.
+- CPU and memory of one Standard v2 unit under calls that reach a model (the
+  `/catalog` burst peaked at 4% CPU; memory did not move). In the 24 hours to
+  09:29 EST on 2026-11-27, with the smoke and risk tests the only load, the
+  hourly peaks were 31% CPU (21:29 EST on 26 November) and 35.6% memory (20:29
+  EST). Memory then reads about 0 for the rest of the day while the gateway
+  kept answering, so the memory metric is not trusted (the burst did not move
+  it either). Also whether a second unit is billed at the secondary-unit rate.
 - The effect of deny-Internet outbound on the integrated instance (phase 3).
 - Whether the Front Door custom-domain deployment (more than 15 minutes) and the
   30 minutes Front Door takes to publish a change are acceptable for the prod

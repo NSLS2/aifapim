@@ -50,7 +50,7 @@ param keyVaultResourceGroup string = resourceGroup().name
 @description('Put a CanNotDelete lock on this resource group. Updates, key regeneration and deployments still work; deleting anything in the group (a subscription, a named value, a model deployment) needs the lock removed first.')
 param lockResourceGroup bool = false
 
-@description('Per-request backend forward-request timeout in seconds applied to all three LLM APIs. Capped at 240 (classic-tier APIM limit).')
+@description('Per-request backend forward-request timeout in seconds applied to all three LLM APIs. Capped at 240. Never reached: the platform in front of the gateway closes a call with no response byte after 230 s.')
 @minValue(1)
 @maxValue(240)
 param backendTimeoutSeconds int = 240
