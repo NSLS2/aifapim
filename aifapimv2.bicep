@@ -434,13 +434,15 @@ module apiManagement 'modules/api-management-v2.bicep' = {
   ]
 }
 
-// Front Door is the public entry. Its Private Link request on the gateway has to be approved by
-// hand (see modules/front-door.bicep), and only then can publicNetworkAccess be set to Disabled.
+// Front Door is the public entry. Its endpoint is named like the gateway, so a dev prefix with dev
+// in it gives a Front Door address with dev in it, which test-models.py needs to take it as dev. Its
+// Private Link request on the gateway has to be approved by hand (see modules/front-door.bicep), and
+// only then can publicNetworkAccess be set to Disabled.
 module frontDoor 'modules/front-door.bicep' = {
   name: 'front-door'
   params: {
     profileName: 'afd-${unique}'
-    endpointName: 'ep-${unique}'
+    endpointName: '${apimNamePrefix}-${unique}'
     wafPolicyName: 'waf${unique}'
     apimId: apimServiceRef.id
     apimHostName: apiManagement.outputs.apiManagementDefaultHostName
