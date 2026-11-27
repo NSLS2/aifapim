@@ -40,7 +40,7 @@ request as work lands.
 | Front Door (`modules/front-door.bicep`) | Dev: Premium profile, endpoint, WAF, Private Link approved, custom domain `aifapimv2-dev.nsls2.bnl.gov` validated and serving the RSA certificate chain |
 | DNS records | Not yet: the CNAME to the Front Door endpoint is to be requested; test on the endpoint's `azurefd.net` name |
 | Event Hub and security events (`modules/event-hub.bicep`, `modules/security-events.bicep`) | Dev: deployed 2026-11-27; one JSON event per request from the service-level policy, over a private endpoint, no prompt text. Hub messages match gateway requests by count; the content of an event is not read yet |
-| Request body log | Dev: infrastructure deployed 2026-11-27 (7 min 39 s, immutability policy created, unlocked); the function code is not published yet |
+| Request body log | Dev: deployed and working 2026-11-27 (infrastructure 7 min 39 s, immutability policy created, unlocked; function code published). Byte-for-byte storage of binary and large bodies is not verified on v2 (see the checklist) |
 | Prod stack (`aifapimv2`) | Not started |
 | Agent client in the logs and token metrics | Merged from `main`; not tried on v2 |
 
@@ -177,7 +177,7 @@ Private endpoints in subnet `pe` -> existing Foundry accounts (East US, East US 
 | Deploy ordering | One-at-a-time writes (Developer "ServiceLocked race") | Kept first, relax after dev shows it is not needed |
 | Subscriptions | People, services, beamlines, catalog poller | Recreated with the same key values (companion repo); the built-in all-access subscription `master` is suspended by hand |
 | Which tool called | A policy variable `agentClient` (the `X-Agent-Client` header if it is one of `opencode`, `opencode2`, `claude`, `codex`, else matched from `User-Agent`, else `other`), logged with `User-Agent` and added to the usage trace and token metrics. Statistics only: a client sets both headers itself | Same files, merged from `main`; the headers are to be checked through Front Door |
-| Dashboard | Grafana dashboard with cost panels | A separate v2 dashboard without cost panels (`build-dashboard.py --stack v2`); one dashboard again when Classic is gone |
+| Dashboard | Grafana dashboard with cost panels | The same dashboard: its Environment variable gains the v2 workspaces (Dev v2 now, Prod v2 when that stack exists) and a v2 edge row. The cost panels are empty for v2 (shared Foundry accounts, billed to Classic). The Classic options go at cutover |
 
 ## Usage and cost
 
@@ -338,7 +338,17 @@ Dev always goes before prod.
   `requestLogManageImmutabilityPolicy = true` (a new account has no policy),
   then `false`: a rewrite of the policy hung a Classic deployment for 3 h 26 min.
   Dev: the first deployment took 7 min 39 s and created the policy (146000 days,
-  unlocked); the setting is now false
+  unlocked); the setting is now false. Checked 2026-11-27 from the control plane
+  (no host reaches the private blob or Log Analytics names): every POST after the
+  deploy has a stored body (52 posts, 0 not loaded; 54 of 54 blob writes 201; no
+  incomplete request), App Insights, the usage trace and the Event Hub still
+  receive data. Not verified on v2: `devcheck binary` and `large` (byte-for-byte
+  storage) and `devcheck latency` could not run, because the BNL resolver answers
+  NXDOMAIN for `stllmreqrckovrtmvdr3y.blob.core.windows.net` and sends
+  `api.loganalytics.azure.com` to 10.8.64.7, an address that is not ours. The
+  loader and the policy fragment are the Classic ones, where they were checked.
+  Run them from a host inside the v2 VNet or after BNL DNS resolves the private
+  zones, with `requestLogReaderIps = ['130.199.137.0/28']` for the run
 - [x] Event Hub with a private endpoint in `pe` and a security event per
   request (`SecurityEvent_Fragment.xml`, written by the service-level policy
   `Global_Policy.xml`: after every response and in on-error, so refused
@@ -352,9 +362,15 @@ Dev always goes before prod.
   set takes no action of its own: the API refuses an action for it); request
   body check by `wafInspectRequestBody` (dev: off, see Phase 3)
 - [ ] Settings for the prod gateway (network 10.10.0.0/16)
-- [ ] Key copy script (same key values) and the scripts that name the APIM
+- [x] Key copy script (same key values) and the scripts that name the APIM
   resource (companion), v2 entries in `beamline-keys.py`, `test-models.py` and
-  `request-log/devcheck.py`
+  `request-log/devcheck.py`. `copy-keys-to-v2.py` has not run against live APIM:
+  its preview on dev is the first test
+- [x] `GET /catalog/chat` (the chat model list, the old `GET /catalog` marked
+  deprecated and returning the same body): in `aifapim` on `main` through
+  `add_catalog_chat` and on this branch; `test-models.py` checks both paths agree.
+  Callers (the ansible catalog poller) move over the parallel month; remove
+  `/catalog` once the gateway log shows no `getCatalog` call
 - [ ] Drop the `apim` and `agw` subnets and their NSGs from the network
   template, and the vault's `agw` rule
 - [ ] Split the Foundry accounts and models out of `aifapim.bicep` (it owns
@@ -463,8 +479,12 @@ To do:
   `Request-X-Agent-Client` back from `AppRequests` and fix the `User-Agent`
   patterns in all five policies together (the patterns are from memory). The
   two headers must reach the gateway unchanged through Front Door
-- [ ] v2 Grafana dashboard (`build-dashboard.py --stack v2`), reader access on
-  the v2 workspaces, Front Door and `Agent Client` panels
+- [x] Grafana: Dev v2 in the Environment variable and a v2 edge row (Front Door,
+  WAF, gateway CPU and memory, `Agent Client`, Classic against v2); every
+  workspace query run against the dev v2 workspace. Still to do: the reader
+  roles for the Grafana app (Log Analytics Reader on `law-rckovrtmvdr3y`,
+  Monitoring Reader on `apim-dev-rckovrtmvdr3y`), import, and the memory panel
+  (a metrics query not tried in Grafana yet); Prod v2 when the stack exists
 
 ### Phase 4: prod
 
