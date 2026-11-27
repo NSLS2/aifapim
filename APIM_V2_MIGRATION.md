@@ -312,8 +312,8 @@ Dev always goes before prod.
 - [x] Settings for the dev gateway (`aifapimv2-dev.bicepparam`)
 - [x] Agent client tracking merged from `main`
 - [ ] Request body log in the v2 template (its own storage and workspace per
-  stack; a storage private endpoint on `int`; the Event Hub is not used, so it is
-  left out)
+  stack; its storage private endpoint goes in `pe`, not in the delegated `int`
+  subnet; the Event Hub is not used, so it is left out)
 - [ ] Settings for the prod gateway (network 10.10.0.0/16)
 - [ ] Key copy script (same key values) and the scripts that name the APIM
   resource (companion), v2 entries in `beamline-keys.py`, `test-models.py` and

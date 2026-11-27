@@ -486,8 +486,9 @@ resource apimServiceRef 'Microsoft.ApiManagement/service@2024-05-01' existing = 
 // hand after the first deployment (docs/apim-v2-migration.md in aifapim-config).
 
 // The system-assigned identity exists only once APIM does, so this role is written after the
-// APIM module. The custom domain needs it: see the header.
-module kvAccess 'modules/keyvault-role.bicep' = if (!empty(keyVaultName)) {
+// APIM module. Only a custom domain on the gateway itself needs it (see the header); with the
+// host name on Front Door the gateway reads no certificate and gets no role on the vault.
+module kvAccess 'modules/keyvault-role.bicep' = if (!empty(keyVaultName) && !empty(apimGatewayHostName)) {
   name: 'kvSecretUserForApimSystem'
   scope: resourceGroup(keyVaultResourceGroup)
   params: {
