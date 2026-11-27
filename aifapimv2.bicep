@@ -99,7 +99,7 @@ param openProductEnabled bool = true
 @description('The claude-auto model of the Anthropic API: the gateway rates the request with a small classifier model and rewrites the model to one of three real models. Leave empty to turn it off. Keys, all required when set: classifierModel, simpleModel, mediumModel and complexModel, each the name of a deployment in the primary region. The complex model is also the answer when the classifier fails.')
 param claudeAuto object = {}
 
-@description('Curated model catalog JSON array (id/name/provider/context/output per chat-LLM model). Populated in the bicepparam file via loadTextContent(\'./model-catalog.json\'). Baked into the GET /catalog return-response policy at deploy time.')
+@description('Curated model catalog JSON array (id/name/provider/context/output per chat-LLM model). Populated in the bicepparam file via loadTextContent(\'./model-catalog.json\'). Baked into the GET /catalog/chat (and the deprecated GET /catalog) return-response policy at deploy time.')
 param catalogJson string
 
 @description('Image model catalog JSON array (id/name/provider/create/edit/routes/residency per image model). Populated in the bicepparam file via loadTextContent(\'./image-catalog.json\'). Baked into the GET /catalog/images return-response policy at deploy time. Kept apart from catalogJson so that clients building a chat model list never see an image model.')
