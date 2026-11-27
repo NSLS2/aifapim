@@ -127,7 +127,7 @@ param foundryAccounts array
 @description('Prefix of the API Management instance name, which is <prefix>-<unique>. A dev prefix with dev in it gives a default host name that the dev smoke test accepts.')
 param apimNamePrefix string = 'apim'
 
-@description('Whether the gateway answers on its public address. Disabled switches the policies from the ip-filter to a check of X-Azure-SocketIP, which only Front Door sets: use it once the Front Door private endpoint connection is approved. APIM refuses to disable it before then, and a deployment that leaves it out resets it to Enabled.')
+@description('Whether the gateway answers on its public address. Disable it once the Front Door private endpoint connection is approved: APIM refuses to disable it before then, and a deployment that leaves it out resets it to Enabled. The client address check is the same either way.')
 @allowed([
   'Enabled'
   'Disabled'
@@ -138,14 +138,14 @@ param publicNetworkAccess string = 'Enabled'
 param modelDeployments array
 
 
-// Client address check. It applies only when publicNetworkAccess is Disabled, which is what makes
-// it safe. Behind Front Door the gateway sees an internal address, so the ip-filter of the Classic
-// policies would refuse everyone; the check reads X-Azure-SocketIP instead, the address Front Door
-// saw on its connection. Front Door overwrites that header when a client sends it (tested), unlike
-// X-Forwarded-For and X-Azure-ClientIP, which follow whatever a client puts first in
-// X-Forwarded-For. On a public request anyone with a key could set the header, so with
-// publicNetworkAccess Enabled the policies keep the ip-filter of Classic, which uses the connecting
-// address. With no usable header the check refuses the request.
+// Client address. Behind Front Door the gateway's connecting address is an internal one, so the
+// policies read the address Front Door saw, X-Azure-SocketIP. Front Door overwrites that header when
+// a client sends it (tested), unlike X-Forwarded-For and X-Azure-ClientIP, which follow what a
+// client writes. The header is trusted only when the connecting address is private (10/8,
+// 172.16/12, 192.168/16, 100.64/10), which is how Front Door's Private Link arrives. A direct
+// request is judged on its own connecting address, so what the check trusts does not depend on
+// publicNetworkAccess. clientAddress is set once, first in the API policy; the global check, the
+// product checks and the metrics all read it, and an address that is missing or not IPv4 is refused.
 //
 // A CIDR entry in the global list covers the usable addresses, in a product list the whole range
 // (the NAT pool, all 16 addresses), as in aifapim.bicep.
@@ -156,26 +156,20 @@ func clientRangeNumbers(ips array, usable bool) string => join(map(ips, ip => co
   : '${ipNumber(ip)}L, ${ipNumber(ip)}L'
 ), ', ')
 
-func clientCheckXml(numbers string) string => '<choose><when condition="@{ var ip = context.Request.Headers.GetValueOrDefault(&quot;X-Azure-SocketIP&quot;, &quot;&quot;).Trim(); if (!Regex.IsMatch(ip, &quot;^[0-9]{1,3}([.][0-9]{1,3}){3}$&quot;)) { return true; } var o = ip.Split(\'.\'); var n = Convert.ToInt64(o[0]) * 16777216L + Convert.ToInt64(o[1]) * 65536L + Convert.ToInt64(o[2]) * 256L + Convert.ToInt64(o[3]); var r = new long[] { ${numbers} }; for (var i = 0; i &lt; r.Length; i += 2) { if (n >= r[i] &amp;&amp; n &lt;= r[i + 1]) { return false; } } return true; }"><return-response><set-status code="403" reason="Forbidden" /></return-response></when></choose>'
+var clientAddressXml = '<set-variable name="clientAddress" value="@{ var peer = context.Request.IpAddress; if (Regex.IsMatch(peer, &quot;^[0-9]{1,3}([.][0-9]{1,3}){3}$&quot;)) { var o = peer.Split(\'.\'); var a = Convert.ToInt32(o[0]); var b = Convert.ToInt32(o[1]); if (a == 10 || (a == 172 &amp;&amp; b >= 16 &amp;&amp; b &lt;= 31) || (a == 192 &amp;&amp; b == 168) || (a == 100 &amp;&amp; b >= 64 &amp;&amp; b &lt;= 127)) { return context.Request.Headers.GetValueOrDefault(&quot;X-Azure-SocketIP&quot;, &quot;&quot;).Trim(); } } return peer; }" />'
+
+func clientCheckXml(numbers string) string => '<choose><when condition="@{ var ip = (string)context.Variables.GetValueOrDefault(&quot;clientAddress&quot;, &quot;&quot;); if (!Regex.IsMatch(ip, &quot;^[0-9]{1,3}([.][0-9]{1,3}){3}$&quot;)) { return true; } var o = ip.Split(\'.\'); var n = Convert.ToInt64(o[0]) * 16777216L + Convert.ToInt64(o[1]) * 65536L + Convert.ToInt64(o[2]) * 256L + Convert.ToInt64(o[3]); var r = new long[] { ${numbers} }; for (var i = 0; i &lt; r.Length; i += 2) { if (n >= r[i] &amp;&amp; n &lt;= r[i + 1]) { return false; } } return true; }"><return-response><set-status code="403" reason="Forbidden" /></return-response></when></choose>'
 
 func dropIpFilter(xml string) string => replace(replace(xml, '<ip-filter action="allow">', ''), '</ip-filter>', '')
 
-func ipFilterEntries(ips array, usable bool) string => join(map(ips, ip => contains(ip, '/')
-  ? '<address-range from="${usable ? parseCidr(ip).firstUsable : parseCidr(ip).network}" to="${usable ? parseCidr(ip).lastUsable : parseCidr(ip).broadcast}" />'
-  : '<address>${ip}</address>'
-), '\n              ')
+// The policy files wrap their allow-list sentinel in an <ip-filter> element of Classic. Here its tags
+// are removed and the sentinel becomes the client address and its check. The metrics dimension that
+// the files fill from X-Forwarded-For reads clientAddress instead, because behind Front Door that
+// header holds three entries (the client, Front Door, the gateway's own hop). The dimension keeps
+// its name, so existing metric queries and workbooks still work.
+func v2Policy(xml string) string => replace(dropIpFilter(xml), 'context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress)', '(string)context.Variables.GetValueOrDefault(&quot;clientAddress&quot;, context.Request.IpAddress)')
 
-var viaFrontDoor = publicNetworkAccess == 'Disabled'
-
-// The policy files wrap their allow-list sentinel in an <ip-filter> element. Behind Front Door its
-// tags are removed and the sentinel becomes the check; otherwise both stay as in Classic. The caller
-// address in the metrics and the usage trace is read from X-Azure-SocketIP there too, because
-// X-Forwarded-For then holds three entries (the client, Front Door, the gateway's own hop). The
-// dimension keeps its name, so existing metric queries and workbooks still work.
-func policyForFrontDoor(xml string, viaFrontDoor bool) string => viaFrontDoor ? replace(dropIpFilter(xml), 'GetValueOrDefault(&quot;X-Forwarded-For&quot;,', 'GetValueOrDefault(&quot;X-Azure-SocketIP&quot;,') : xml
-func allowListXml(ips array, usable bool, viaFrontDoor bool) string => viaFrontDoor ? clientCheckXml(clientRangeNumbers(ips, usable)) : ipFilterEntries(ips, usable)
-
-var allowedIpsXml = allowListXml(allowedClientIps, true, viaFrontDoor)
+var allowedIpsXml = '${clientAddressXml}${clientCheckXml(clientRangeNumbers(allowedClientIps, true))}'
 
 // The Front Door WAF refuses a list in which an address lies inside a range of the same list, so
 // bare addresses covered by a listed CIDR are left out. (Two overlapping CIDRs are not handled.) Every
@@ -208,7 +202,7 @@ var requestLogMarker = '<!-- __REQUEST_LOG__ -->'
 // usageTrace is true.
 var usageTraceXml = usageTrace ? loadTextContent('apim_policies/UsageTrace_Fragment.xml') : ''
 var inboundLogXml = usageTraceXml
-var openApiXml = replace(replace(replace(replace(replace(replace(replace(replace(policyForFrontDoor(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), viaFrontDoor), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
+var openApiXml = replace(replace(replace(replace(replace(replace(replace(replace(v2Policy(loadTextContent('apim_policies/AOAI_Policy-Managed_Identity_with_Retry_MultiRegion.xml')), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__AUDIO_REQUESTS_PER_MINUTE__', string(audioRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
 
 // Anthropic API policy (multi-region retry variant).
 // The claude-auto block (apim_policies/ClaudeAuto_Fragment.xml) replaces the
@@ -216,17 +210,17 @@ var openApiXml = replace(replace(replace(replace(replace(replace(replace(replace
 // otherwise. Applied after the other substitutions, so its own placeholders
 // are filled in here and the metric namespace is filled in afterwards.
 var claudeAutoMarker = '<!-- __CLAUDE_AUTO__ -->'
-var claudeAutoXml = empty(claudeAuto) ? '' : replace(replace(replace(replace(replace(policyForFrontDoor(loadTextContent('apim_policies/ClaudeAuto_Fragment.xml'), viaFrontDoor), '__CLAUDE_AUTO_URL__', '${anthropicServiceUrlPrimary}/v1/messages'), '__CLAUDE_AUTO_CLASSIFIER__', claudeAuto.classifierModel), '__CLAUDE_AUTO_SIMPLE__', claudeAuto.simpleModel), '__CLAUDE_AUTO_MEDIUM__', claudeAuto.mediumModel), '__CLAUDE_AUTO_COMPLEX__', claudeAuto.complexModel)
-var anthropicApiXml = replace(replace(replace(replace(replace(replace(policyForFrontDoor(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), viaFrontDoor), claudeAutoMarker, claudeAutoXml), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml)
+var claudeAutoXml = empty(claudeAuto) ? '' : replace(replace(replace(replace(replace(v2Policy(loadTextContent('apim_policies/ClaudeAuto_Fragment.xml')), '__CLAUDE_AUTO_URL__', '${anthropicServiceUrlPrimary}/v1/messages'), '__CLAUDE_AUTO_CLASSIFIER__', claudeAuto.classifierModel), '__CLAUDE_AUTO_SIMPLE__', claudeAuto.simpleModel), '__CLAUDE_AUTO_MEDIUM__', claudeAuto.mediumModel), '__CLAUDE_AUTO_COMPLEX__', claudeAuto.complexModel)
+var anthropicApiXml = replace(replace(replace(replace(replace(replace(v2Policy(loadTextContent('apim_policies/Anthropic_Policy-Managed_Identity_with_Retry_MultiRegion.xml')), claudeAutoMarker, claudeAutoXml), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml)
 
 // OpenAI v1 Messages API policy (multi-region retry variant).
-var openaiV1MessagesApiXml = replace(replace(replace(replace(replace(replace(replace(policyForFrontDoor(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), viaFrontDoor), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
+var openaiV1MessagesApiXml = replace(replace(replace(replace(replace(replace(replace(v2Policy(loadTextContent('apim_policies/OpenAIv1Messages_Policy-Managed_Identity_with_Retry_MultiRegion.xml')), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute)), '__SECONDARY_ONLY_MODELS__', secondaryOnlyModelList)
 
 // Black Forest Labs API policy (multi-region retry variant).
-var bflApiXml = replace(replace(replace(replace(replace(replace(policyForFrontDoor(loadTextContent('apim_policies/BlackForestLabs_Policy-Managed_Identity_with_Retry_MultiRegion.xml'), viaFrontDoor), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+var bflApiXml = replace(replace(replace(replace(replace(replace(v2Policy(loadTextContent('apim_policies/BlackForestLabs_Policy-Managed_Identity_with_Retry_MultiRegion.xml')), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), '__SECONDARY_MODELS__', secondaryModelList), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
 
 // MAI image API policy (one backend, no failover: the models are in the secondary region only).
-var maiApiXml = replace(replace(replace(replace(replace(policyForFrontDoor(loadTextContent('apim_policies/MAI_Image_Policy-Managed_Identity_with_Retry.xml'), viaFrontDoor), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
+var maiApiXml = replace(replace(replace(replace(replace(v2Policy(loadTextContent('apim_policies/MAI_Image_Policy-Managed_Identity_with_Retry.xml')), '__BACKEND_TIMEOUT__', string(backendTimeoutSeconds)), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__METRIC_NAMESPACE__', apimProductName), requestLogMarker, inboundLogXml), '__IMAGE_REQUESTS_PER_MINUTE__', string(imageRequestsPerMinute))
 
 // Catalog API policy: static return-response, no backend.
 // Sentinels replaced: __ALLOWED_CLIENT_IPS__ (IP filter), __CATALOG_JSON__ (chat model list
@@ -240,7 +234,7 @@ var embeddingCatalogJsonXml = replace(replace(replace(embeddingCatalogJson, '&',
 var transcriptionCatalogJsonXml = replace(replace(replace(transcriptionCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
 var routerCatalogJsonXml = replace(replace(replace(routerCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
 var imageCatalogJsonXml = replace(replace(replace(imageCatalogJson, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
-var catalogApiXml = replace(replace(replace(replace(replace(replace(policyForFrontDoor(loadTextContent('apim_policies/Catalog_Policy.xml'), viaFrontDoor), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__ROUTER_CATALOG_JSON__', routerCatalogJsonXml), '__TRANSCRIPTION_CATALOG_JSON__', transcriptionCatalogJsonXml), '__EMBEDDING_CATALOG_JSON__', embeddingCatalogJsonXml), '__IMAGE_CATALOG_JSON__', imageCatalogJsonXml), '__CATALOG_JSON__', catalogJsonXml)
+var catalogApiXml = replace(replace(replace(replace(replace(replace(v2Policy(loadTextContent('apim_policies/Catalog_Policy.xml')), '__ALLOWED_CLIENT_IPS__', allowedIpsXml), '__ROUTER_CATALOG_JSON__', routerCatalogJsonXml), '__TRANSCRIPTION_CATALOG_JSON__', transcriptionCatalogJsonXml), '__EMBEDDING_CATALOG_JSON__', embeddingCatalogJsonXml), '__IMAGE_CATALOG_JSON__', imageCatalogJsonXml), '__CATALOG_JSON__', catalogJsonXml)
 
 // Azure OpenAI data-plane inference spec is pinned locally so deployments are
 // deterministic and do not depend on github.com being reachable at deploy time.
@@ -288,9 +282,9 @@ var catalogProductDescription = 'Read-only product scoped to GET /catalog only, 
 // are escaped.
 func xmlEscape(value string) string => replace(replace(replace(replace(replace(value, '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '"', '&quot;'), '\'', '&apos;')
 
-func productIpFilterXml(ips array, viaFrontDoor bool) string => empty(ips) ? '' : viaFrontDoor ? clientCheckXml(clientRangeNumbers(ips, false)) : '<ip-filter action="allow">\n            ${ipFilterEntries(ips, false)}\n        </ip-filter>'
+func productIpFilterXml(ips array) string => empty(ips) ? '' : clientCheckXml(clientRangeNumbers(ips, false))
 
-var productIpPolicyTemplate = policyForFrontDoor(loadTextContent('apim_policies/Product_IpRestricted_Policy.xml'), viaFrontDoor)
+var productIpPolicyTemplate = v2Policy(loadTextContent('apim_policies/Product_IpRestricted_Policy.xml'))
 var productEntraAuthPolicyTemplate = loadTextContent('apim_policies/Product_EntraAuth_Policy.xml')
 
 // The open product needs no subscription key, so its policy is the only access
@@ -315,11 +309,11 @@ var serviceProductsResolved = map(serviceProducts, p => {
     ? !openProductEnabled
       ? productOpenDisabledPolicyXml
       : (entraOpenComplete(p.?entraAuth ?? {})
-        ? replace(replace(replace(replace(replace(replace(productEntraOpenPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [], viaFrontDoor)), '__ENTRA_CLIENT_APPS__', clientAppsXml(p.entraAuth.?clientApplicationIds ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_SCOPE__', xmlEscape(p.entraAuth.scope)), '__ENTRA_USER_ROLE__', xmlEscape(p.entraAuth.userRole))
+        ? replace(replace(replace(replace(replace(replace(productEntraOpenPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [])), '__ENTRA_CLIENT_APPS__', clientAppsXml(p.entraAuth.?clientApplicationIds ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_SCOPE__', xmlEscape(p.entraAuth.scope)), '__ENTRA_USER_ROLE__', xmlEscape(p.entraAuth.userRole))
         : productDenyAllPolicyXml)
     : !empty(p.?entraAuth ?? {})
-    ? replace(replace(replace(replace(productEntraAuthPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [], viaFrontDoor)), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_ROLE__', xmlEscape(p.entraAuth.role))
-    : empty(p.?allowedClientIps ?? []) ? '' : replace(productIpPolicyTemplate, '__PRODUCT_ALLOWED_IPS__', allowListXml(p.allowedClientIps, false, viaFrontDoor))
+    ? replace(replace(replace(replace(productEntraAuthPolicyTemplate, '__PRODUCT_IP_FILTER__', productIpFilterXml(p.?allowedClientIps ?? [])), '__ENTRA_TENANT_ID__', xmlEscape(p.entraAuth.tenantId)), '__ENTRA_AUDIENCE__', xmlEscape(p.entraAuth.audience)), '__ENTRA_ROLE__', xmlEscape(p.entraAuth.role))
+    : empty(p.?allowedClientIps ?? []) ? '' : replace(productIpPolicyTemplate, '__PRODUCT_ALLOWED_IPS__', clientCheckXml(clientRangeNumbers(p.allowedClientIps, false)))
 })
 
 var unique = uniqueString(resourceGroup().id, subscription().id)
