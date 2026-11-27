@@ -39,7 +39,7 @@ request as work lands.
 | Dev gateway (`aifapimv2.bicep`, Standard v2) | Deployed 2026-11-26, public access Disabled; model smoke test passes through Front Door |
 | Front Door (`modules/front-door.bicep`) | Dev: Premium profile, endpoint, WAF, Private Link approved, custom domain `aifapimv2-dev.nsls2.bnl.gov` validated and serving the RSA certificate chain |
 | DNS records | Not yet: the CNAME to the Front Door endpoint is to be requested; test on the endpoint's `azurefd.net` name |
-| Event Hub and security events (`modules/event-hub.bicep`, `modules/security-events.bicep`) | In the template, not yet deployed: one JSON event per request from the service-level policy, over a private endpoint, no prompt text |
+| Event Hub and security events (`modules/event-hub.bicep`, `modules/security-events.bicep`) | Dev: deployed 2026-11-27; one JSON event per request from the service-level policy, over a private endpoint, no prompt text. Hub messages match gateway requests by count; the content of an event is not read yet |
 | Request body log | Not in the v2 template yet |
 | Prod stack (`aifapimv2`) | Not started |
 | Agent client in the logs and token metrics | Merged from `main`; not tried on v2 |
@@ -340,8 +340,8 @@ Dev always goes before prod.
   from `eventHubAllowedIps` (dev: the NAT pool)
 - [x] WAF managed rules in the Front Door template: default rule set 2.2 in
   Prevention, bot manager 1.1, HTTP DDoS 1.0 (its rules log by default; the rule
-  set takes no action of its own); request body check by `wafInspectRequestBody`
-  (dev: on)
+  set takes no action of its own: the API refuses an action for it); request
+  body check by `wafInspectRequestBody` (dev: off, see Phase 3)
 - [ ] Settings for the prod gateway (network 10.10.0.0/16)
 - [ ] Key copy script (same key values) and the scripts that name the APIM
   resource (companion), v2 entries in `beamline-keys.py`, `test-models.py` and
@@ -411,6 +411,27 @@ Done:
 - [x] `model-router`: the live routers of dev and prod route across 12 models,
   `gpt-6-luna` among them. The settings listed 8, so they were corrected (and
   the router catalogs regenerated); see aifapim-config
+- [x] Event Hub, logger, global policy and WAF managed rules deployed on dev,
+  2026-11-27. The first deploy failed three times, each fixed in the template:
+  APIM's management plane tests the logger connection from outside the VNet and
+  is refused unless the namespace allows trusted services (now on); the HTTP
+  DDoS rule set takes no action (the API refuses one); and `master` cannot be
+  declared (see the hardening checklist)
+- [x] Security events against gateway requests: a run of 12 probe calls (valid
+  and bad keys, unknown path, unknown model, `/catalog`, five prompts) made 8
+  requests reach the gateway and 8 hub messages arrived about a minute later,
+  so refused requests (401, 404) and `/catalog` (`return-response`) are in the
+  hub. The 4 calls the WAF blocked never reach the gateway or the hub: they
+  appear only in the WAF log. Counts only; no event has been read
+- [x] WAF body check: with it on, 4 of 5 coding prompts got a Front Door 403
+  (shell command: RCE 932xxx; `<script>` tag: XSS 941xxx; `../../../etc/shadow`:
+  LFI 930xxx; an `eval` code review: PHP 933160, Node.js 934100, RCE). Only the
+  SQL text passed. Earlier clean runs ran before the WAF change reached Front
+  Door (15 to 30 minutes) and proved nothing about the WAF. Decision: off in dev
+  and prod (`wafInspectRequestBody = false`); the default rule set still checks
+  the URL, query, headers and cookies, and the bot manager only logs
+  (`UnknownBots` for script clients). To redeploy and re-test: all four blocked
+  prompts must return 200. An image-edit prompt through the WAF is not tested
 
 To do:
 
@@ -498,8 +519,10 @@ Network:
   the WAF inspects, whether Premium includes the managed rules at no extra
   charge (the Front Door bill will show), and which of the prompts in the tests
   it blocks
-- [ ] Decide the WAF body check: on only if real prompts (code, SQL, shell)
-  pass; if not, exclusions or off. Prod follows what dev shows
+- [x] WAF body check off (`wafInspectRequestBody = false`): real prompts with
+  code, shell and paths are blocked by the default rule set; exclusions for every
+  field that carries content would leave almost nothing to inspect. Prompt
+  content is for the model provider's content filters. Prod follows dev
 - [ ] DDoS protection: decide what Front Door Premium and the HTTP DDoS rule set
   give and whether more is needed (Azure DDoS Protection is not available for
   the v2 tiers)
@@ -526,7 +549,10 @@ Identity and access:
 Logging and monitoring:
 
 - [x] Security events: one JSON line per request to the Event Hub (who, what,
-  outcome; no prompt text), over a private endpoint
+  outcome; no prompt text), over a private endpoint. Trade-off: the namespace
+  allows trusted Microsoft services and the NAT pool from outside the VNet,
+  because APIM's management plane validates the logger from outside it; local
+  authentication stays off, so a caller still needs an Entra role
 - [ ] Decide the destination of the events (SIEM): the plan is Alloy on a host
   reading the hub into a new Loki tenant (`n2sn-aifapim`, provisional); the
   data classification, volume, host, port 9093 egress, Alloy's certificate
