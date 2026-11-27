@@ -45,7 +45,7 @@ param gatewayKeyVaultSecretName string = ''
 param keyVaultName string = ''
 
 @description('Resource group of the Key Vault. Defaults to the current resource group.')
-param keyVaultResourceGroup string = ''
+param keyVaultResourceGroup string = resourceGroup().name
 
 @description('Put a CanNotDelete lock on this resource group. Updates, key regeneration and deployments still work; deleting anything in the group (a subscription, a named value, a model deployment) needs the lock removed first.')
 param lockResourceGroup bool = false
@@ -130,12 +130,12 @@ param apimNamePrefix string = 'apim'
 @description('Host name clients use to reach the gateway through Front Door, such as aifapimv2-dev.nsls2.bnl.gov. Front Door serves the certificate gatewayKeyVaultSecretName from the vault keyVaultName (RSA, with its intermediates), and the host name must be in it. Leave empty for the first deployment: the Front Door identity needs the Key Vault role first.')
 param frontDoorHostName string = ''
 
-@description('Whether the gateway answers on its public address. Disable it once the Front Door private endpoint connection is approved: APIM refuses to disable it before then, and a deployment that leaves it out resets it to Enabled. The client address check is the same either way.')
+@description('Whether the gateway answers on its public address. No default, so every parameter file states it: Enabled only for the bootstrap, Disabled once the Front Door private endpoint connection is approved (APIM refuses to disable it before then, and a deployment that leaves it out resets it to Enabled). The client address check is the same either way.')
 @allowed([
   'Enabled'
   'Disabled'
 ])
-param publicNetworkAccess string = 'Enabled'
+param publicNetworkAccess string
 
 @description('Model deployments of each region, as in the Classic settings: the first list is the secondary region (eastus), the second the primary (eastus2). Only the names are used: they decide which models fail over, and which start on the secondary.')
 param modelDeployments array
