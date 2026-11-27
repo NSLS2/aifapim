@@ -63,6 +63,15 @@ service and the configuration is replicated. Reasons to move:
   preview API version for the service resource, so they differ only in this
   property. In prod the request log storage accounts are `Standard_ZRS`; the
   Flex plan is not zone redundant (it would keep two instances always running).
+  **ZRS has no Archive tier**, so the prod blobs move Hot to Cold at 7 days and
+  stay there (the template adds the Archive step only on LRS, GRS and RA-GRS).
+  Chosen 2026-11-27 over LRS with Archive (zone redundancy was the point of the
+  prod design). Cost, eastus retail prices that day: Cold ZRS $0.004 per GB-month,
+  Archive LRS $0.00099. Classic prod's body log grew from 2.4 GB (1 November) to
+  266 GB (26 November), about 10.5 GB a day or 3.9 TB a year, kept for ever. At
+  that rate Cold ZRS costs about $15 a month after one year and $77 after five,
+  against $4 and $19 in Archive: about $1,750 more over five years. Cold is also
+  readable at once, where Archive needs hours of rehydration.
 
 What v2 does not have (Microsoft, 2026-11): multi-region, backup and restore,
 Git configuration, direct management API access, cipher configuration, the

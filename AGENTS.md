@@ -712,9 +712,10 @@ Fetch the keys with
   forget, name = request id = `CorrelationId`). `modules/request-log.bicep`
   builds the rest: the data storage account (private endpoint, shared-key
   access off, container-level time-based immutability, Hot to Cold at 7 days
-  to Archive at 90, no delete), Event Grid `BlobCreated` to a queue on a host
-  storage account, a Flex Consumption function app in a delegated subnet of
-  `regions[0]`'s VNet (private subnet with no internet route, private
+  to Archive at 90, no delete; a zone redundant account (ZRS) has no Archive
+  tier, so there the blobs stay in Cold), Event Grid `BlobCreated` to a queue on
+  a host storage account, a Flex Consumption function app in a delegated subnet
+  of `regions[0]`'s VNet (private subnet with no internet route, private
   endpoints for the host storage), an Azure Monitor private link scope with a
   private endpoint (`request-log-ampls.bicep`), and a separate
   `law-prompts-<unique>` workspace with the custom table `LlmRequestBody_CL`

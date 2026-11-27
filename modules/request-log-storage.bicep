@@ -39,12 +39,15 @@ param storageSkuName string = 'Standard_LRS'
 @minValue(1)
 param coldAfterDays int = 7
 
-@description('Move blobs to the Archive tier this many days after creation. Must be later than coldAfterDays.')
+@description('Move blobs to the Archive tier this many days after creation. Must be later than coldAfterDays. Ignored when storageSkuName is zone redundant (Archive is not available there).')
 @minValue(2)
 param archiveAfterDays int = 90
 
 @description('Resource ID of a Log Analytics workspace that receives blob read, write and delete audit logs (never the request content). Leave empty to skip.')
 param auditWorkspaceId string = ''
+
+// The Archive tier does not exist on zone redundant accounts (ZRS, GZRS, RA-GZRS): their blobs stay in Cold.
+var archiveSupported = !contains(storageSkuName, 'ZRS')
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName
@@ -137,14 +140,15 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
               ]
             }
             actions: {
-              baseBlob: {
+              baseBlob: union({
                 tierToCold: {
                   daysAfterCreationGreaterThan: coldAfterDays
                 }
+              }, archiveSupported ? {
                 tierToArchive: {
                   daysAfterCreationGreaterThan: archiveAfterDays
                 }
-              }
+              } : {})
             }
           }
         }
