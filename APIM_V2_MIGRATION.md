@@ -353,8 +353,14 @@ Done:
 
 - [x] Smoke test through Front Door (`test-models.py`), 2026-11-27 09:3x EST:
   48 pass, 2 warn (`claude-fable-5-2*` return empty replies, as on Classic
-  prod), 0 fail. Only the router catalog check fails: the deployed gateway still
-  serves the old 8-model catalog, and the regenerated one is not deployed yet
+  prod), 0 fail. Only the router catalog check failed: the deployed gateway
+  still served the old 8-model catalog. After the dev deploy of the regenerated
+  catalog (12 models) the same test passed everything on 2026-11-27:
+  48 pass, 2 warn, 0 fail, and the router, image, embedding and transcription
+  catalog checks pass. The first run of this test through `test-v2-dev` failed
+  18 models with 404 because it took the model list of the v2 settings, which
+  has names only, and tested Claude and FLUX models as OpenAI; it now reads
+  `aifapim-dev.bicepparam`
 - [x] 6,600 calls to `GET /catalog` at 55 requests a second for 120 seconds
   (`afd-burst-test.py`) all returned 200: latency p50 32 ms, p95 99 ms, max
   1.3 s. The gateway metrics for the window: CPU at most 4% (most minutes 1%),
