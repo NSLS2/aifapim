@@ -548,7 +548,8 @@ module frontDoorKeyVaultAccess 'modules/keyvault-role.bicep' = if (!empty(keyVau
   scope: resourceGroup(keyVaultResourceGroup)
   params: {
     keyVaultName: keyVaultName
-    roleName: guid(subscription().id, keyVaultName, 'afd-${unique}', 'KeyVaultSecretUser', 'system-assigned')
+    secretName: gatewayKeyVaultSecretName
+    roleName: guid(subscription().id, keyVaultName, 'afd-${unique}', 'KeyVaultSecretUser', gatewayKeyVaultSecretName)
     principalId: frontDoor.outputs.identityPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
@@ -575,7 +576,8 @@ module kvAccess 'modules/keyvault-role.bicep' = if (!empty(keyVaultName) && gran
   scope: resourceGroup(keyVaultResourceGroup)
   params: {
     keyVaultName: keyVaultName
-    roleName: guid(subscription().id, keyVaultName, apiManagementServiceName, 'KeyVaultSecretUser', 'system-assigned')
+    secretName: gatewayKeyVaultSecretName
+    roleName: guid(subscription().id, keyVaultName, apiManagementServiceName, 'KeyVaultSecretUser', gatewayKeyVaultSecretName)
     principalId: apiManagement.outputs.apiManagementIdentityPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
