@@ -973,7 +973,9 @@ no-op cost-wise; the pinning is also harmless on those tiers.
 - **Gateway certificates** (re-issued 2026-11-26) come from the
   `ansible-aifapim-gateway-certs` playbook, not from this repo: four vault
   certificates (`aifapim`, `aifapim-dev`, `aifapimv2`, `aifapimv2-dev`, the
-  first label of the host), ECDSA P-256 on the SSL.com ECC chain. The Classic
+  first label of the host), RSA 4096 on the SSL.com RSA chain, with the
+  intermediate in the PFX (Front Door accepts only RSA, and needs the
+  intermediate). The Classic
   gateways read the secret without a version, so a new version needs no deploy,
   but APIM picks it up on its own schedule (no SLA on Developer); **Sync
   certificates** in the portal does it at once as a service update of up to 45
