@@ -286,7 +286,9 @@ Classic `apim` subnets and, since 2026-11-26, the dev `agw` subnet.
   `../aifapim/aifapimv2*.bicep`.
 - The built-in all-access subscription is turned off on both v2 instances, by
   hand (a template write fails with "Can't modify global subscription").
-- Request tracing is turned off on every subscription.
+- Request tracing is turned off on every subscription the key tooling makes
+  (`apim-subscriptions.bicep` in the companion repository sets
+  `allowTracing: false`); the gateway template creates no subscription.
 
 ## Phases
 
@@ -361,6 +363,16 @@ Done:
   not the load of real traffic
 - [x] A non-streamed call over 230 seconds fails with 500 and HTML (see
   "Timeouts")
+- [x] Token metering equals Classic dev (the same smoke test, read from
+  `AppMetrics` and `ApiManagementGatewayLlmLog` on 2026-11-27): the same 15
+  token and count metrics, and the same dimension keys on every token metric,
+  `Agent Client` and `Subscription Name` among them, so nothing is dropped by
+  the limit of 5 custom dimensions. Anthropic completion tokens are recorded
+  (322 on both) and every Anthropic call in the LLM log has its model name and
+  completion tokens, so the old logging gaps do not show on either gateway.
+  Not checked: `Agent Client` with a real tool (the smoke test sends neither
+  header, so every row reads `other`), and `X-Forwarded-For` when a client
+  sends its own (it carries the caller's address through Front Door)
 - [x] Front Door to the gateway over Private Link
 - [x] Client address check: with public access Enabled, a direct call with a
   forged `X-Azure-SocketIP: 8.8.8.8` gets 401 (the header is ignored), as do
@@ -389,7 +401,6 @@ To do:
   source address outside the NAT pool)
 - [ ] Hermes egress addresses on the prod WAF list
 - [ ] Outbound flows, then add the deny-Internet rule on the `int` subnet
-- [ ] Anthropic token metering and the logging gaps versus Classic
 - [ ] CPU and memory of one unit under calls that reach a model (the burst
   above did not)
 - [ ] Request log, certificate renewal, expiry alert
@@ -401,10 +412,6 @@ To do:
   `Request-X-Agent-Client` back from `AppRequests` and fix the `User-Agent`
   patterns in all five policies together (the patterns are from memory). The
   two headers must reach the gateway unchanged through Front Door
-- [ ] Token metrics still arrive in `AppMetrics` with an `Agent Client` column.
-  The policies carry 8 dimension names, 5 with values, against a documented
-  limit of 5 custom dimensions per policy; if the metrics stop, drop one
-  dimension (the traces and `AppRequests` still carry the client)
 - [ ] v2 Grafana dashboard (`build-dashboard.py --stack v2`), reader access on
   the v2 workspaces, Front Door and `Agent Client` panels
 
@@ -447,8 +454,14 @@ Decided:
   first deployment (a template cannot: APIM answers a write with "Can't modify
   global subscription"); checked on dev. Its keys skip every
   product policy, including the Entra token check of the agent products.
-- [x] `allowTracing: false` on every subscription, in the gateway template
-  (checked on dev); still to add to the key tooling of the companion repository.
+  Nothing in a template keeps it suspended, so the check script is run again
+  after each deployment and before prod is announced.
+- [x] `allowTracing: false` on every subscription the key tooling makes
+  (`apim-subscriptions.bicep`, companion repository); the gateway template makes
+  none. Checked on dev: `master` and `svc-v2-smoke` both read false. A
+  subscription made another way is not covered, and nothing enforces it
+  afterwards: the check script (`v2-hardening-check.py`) only reports each
+  subscription's state and tracing, so run it after every key change.
 
 Network:
 
@@ -505,12 +518,11 @@ Governance and recovery:
   version is updated in place by Microsoft, and the activity log showed no write
   to read with the read-only identity). The settings now match the live
   routers.
-- The real `User-Agent` strings of opencode, Claude Code and Codex, and whether
-  the token metrics keep all their dimensions on v2: the policies name 8, 5 with
-  values, and the documented limit is 5 custom dimensions per policy (phase 3).
+- The real `User-Agent` strings of opencode, Claude Code and Codex (phase 3).
+  The token metrics keep all their dimensions on v2: checked against Classic.
 - Hermes egress addresses and the prod allow-list for the prod WAF.
-- Whether Front Door's access and WAF logs reach the v2 workspace, and what the
-  Front Door request and transfer charges come to.
+- What the Front Door request and transfer charges come to (its access and WAF
+  logs reach the v2 workspace).
 - CPU and memory of one Standard v2 unit under calls that reach a model (the
   `/catalog` burst peaked at 4% CPU; memory did not move). In the 24 hours to
   09:29 EST on 2026-11-27, with the smoke and risk tests the only load, the
