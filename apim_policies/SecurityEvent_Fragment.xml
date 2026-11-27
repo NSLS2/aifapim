@@ -2,7 +2,9 @@
              on-error sections of the service-level policy, so it also covers requests that a
              product check or the rate limit refused. It holds who called (key, object id,
              address), what (API, path, model) and the outcome (status, error reason, time), and no
-             prompt, response or header value except a cut user agent. Everything that comes from
+             prompt, response or header value except a cut user agent. When no API policy has
+             run yet (an unmatched route), the address is resolved here the same way as in the
+             API policies: the connecting address, or X-Azure-SocketIP when that is private. Everything that comes from
              the client is cut, and JSON encoding keeps it from breaking out of its field. A failure
              while building the line sends an error record instead of failing the request. -->
         <log-to-eventhub logger-id="security-events">@{
@@ -11,16 +13,26 @@
                 var model = System.Text.RegularExpressions.Regex.Replace((string)v.GetValueOrDefault(&quot;requestModel&quot;, (string)v.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;)), &quot;[^A-Za-z0-9._@\\-]&quot;, &quot;_&quot;);
                 var path = context.Request.OriginalUrl.Path;
                 var agent = context.Request.Headers.GetValueOrDefault(&quot;User-Agent&quot;, &quot;&quot;);
+                var peer = context.Request.IpAddress;
+                var caller = peer;
+                if (System.Text.RegularExpressions.Regex.IsMatch(peer, &quot;^[0-9]{1,3}([.][0-9]{1,3}){3}$&quot;)) {
+                    var o = peer.Split('.');
+                    var a = Convert.ToInt32(o[0]);
+                    var b = Convert.ToInt32(o[1]);
+                    if (a == 10 || (a == 172 &amp;&amp; b &gt;= 16 &amp;&amp; b &lt;= 31) || (a == 192 &amp;&amp; b == 168) || (a == 100 &amp;&amp; b &gt;= 64 &amp;&amp; b &lt;= 127)) {
+                        caller = context.Request.Headers.GetValueOrDefault(&quot;X-Azure-SocketIP&quot;, &quot;&quot;).Trim();
+                    }
+                }
                 var e = new JObject();
                 e[&quot;time&quot;] = DateTime.UtcNow.ToString(&quot;o&quot;);
                 e[&quot;requestId&quot;] = context.RequestId.ToString();
-                e[&quot;client&quot;] = (string)v.GetValueOrDefault(&quot;clientAddress&quot;, context.Request.IpAddress);
+                e[&quot;client&quot;] = (string)v.GetValueOrDefault(&quot;clientAddress&quot;, caller);
                 e[&quot;method&quot;] = context.Request.Method;
                 e[&quot;path&quot;] = path.Length &gt; 200 ? path.Substring(0, 200) : path;
                 e[&quot;api&quot;] = context.Api == null ? &quot;&quot; : context.Api.Name;
                 e[&quot;product&quot;] = context.Product == null ? &quot;&quot; : context.Product.Id;
                 e[&quot;subscription&quot;] = context.Subscription == null ? &quot;&quot; : context.Subscription.Id;
-                e[&quot;callerType&quot;] = (string)v.GetValueOrDefault(&quot;callerType&quot;, &quot;&quot;);
+                e[&quot;callerType&quot;] = context.Subscription == null ? (string)v.GetValueOrDefault(&quot;callerType&quot;, &quot;&quot;) : &quot;key&quot;;
                 e[&quot;callerId&quot;] = (string)v.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;);
                 e[&quot;callerName&quot;] = (string)v.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;);
                 e[&quot;model&quot;] = model.Length &gt; 64 ? model.Substring(0, 64) : model;
