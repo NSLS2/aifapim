@@ -40,7 +40,7 @@ request as work lands.
 | Front Door (`modules/front-door.bicep`) | Dev: Premium profile, endpoint, WAF, Private Link approved, custom domain `aifapimv2-dev.nsls2.bnl.gov` validated and serving the RSA certificate chain |
 | DNS records | Not yet: the CNAME to the Front Door endpoint is to be requested; test on the endpoint's `azurefd.net` name |
 | Event Hub and security events (`modules/event-hub.bicep`, `modules/security-events.bicep`) | Dev: deployed 2026-11-27; one JSON event per request from the service-level policy, over a private endpoint, no prompt text. Hub messages match gateway requests by count; the content of an event is not read yet |
-| Request body log | In the template (`requestBodyLogging`), on in the dev settings; not deployed yet |
+| Request body log | Dev: infrastructure deployed 2026-11-27 (7 min 39 s, immutability policy created, unlocked); the function code is not published yet |
 | Prod stack (`aifapimv2`) | Not started |
 | Agent client in the logs and token metrics | Merged from `main`; not tried on v2 |
 
@@ -337,7 +337,8 @@ Dev always goes before prod.
   subnet that the template adds in 10.x.3.0/24). First deployment with
   `requestLogManageImmutabilityPolicy = true` (a new account has no policy),
   then `false`: a rewrite of the policy hung a Classic deployment for 3 h 26 min.
-  Not deployed yet
+  Dev: the first deployment took 7 min 39 s and created the policy (146000 days,
+  unlocked); the setting is now false
 - [x] Event Hub with a private endpoint in `pe` and a security event per
   request (`SecurityEvent_Fragment.xml`, written by the service-level policy
   `Global_Policy.xml`: after every response and in on-error, so refused
