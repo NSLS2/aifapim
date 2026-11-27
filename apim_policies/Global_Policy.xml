@@ -1,0 +1,13 @@
+<policies>
+    <inbound>
+    </inbound>
+    <backend>
+        <forward-request />
+    </backend>
+    <outbound>
+        <!-- __SECURITY_EVENT__ -->
+    </outbound>
+    <on-error>
+        <!-- __SECURITY_EVENT__ -->
+    </on-error>
+</policies>

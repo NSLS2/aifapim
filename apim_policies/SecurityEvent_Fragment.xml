@@ -1,0 +1,36 @@
+<!-- Security event. One JSON line per request to the Event Hub logger, from the outbound and
+             on-error sections of the service-level policy, so it also covers requests that a
+             product check or the rate limit refused. It holds who called (key, object id,
+             address), what (API, path, model) and the outcome (status, error reason, time), and no
+             prompt, response or header value except a cut user agent. Everything that comes from
+             the client is cut, and JSON encoding keeps it from breaking out of its field. A failure
+             while building the line sends an error record instead of failing the request. -->
+        <log-to-eventhub logger-id="security-events">@{
+            try {
+                var v = context.Variables;
+                var model = System.Text.RegularExpressions.Regex.Replace((string)v.GetValueOrDefault(&quot;requestModel&quot;, (string)v.GetValueOrDefault(&quot;deploymentName&quot;, &quot;&quot;)), &quot;[^A-Za-z0-9._@\\-]&quot;, &quot;_&quot;);
+                var path = context.Request.OriginalUrl.Path;
+                var agent = context.Request.Headers.GetValueOrDefault(&quot;User-Agent&quot;, &quot;&quot;);
+                var e = new JObject();
+                e[&quot;time&quot;] = DateTime.UtcNow.ToString(&quot;o&quot;);
+                e[&quot;requestId&quot;] = context.RequestId.ToString();
+                e[&quot;client&quot;] = (string)v.GetValueOrDefault(&quot;clientAddress&quot;, context.Request.IpAddress);
+                e[&quot;method&quot;] = context.Request.Method;
+                e[&quot;path&quot;] = path.Length &gt; 200 ? path.Substring(0, 200) : path;
+                e[&quot;api&quot;] = context.Api == null ? &quot;&quot; : context.Api.Name;
+                e[&quot;product&quot;] = context.Product == null ? &quot;&quot; : context.Product.Id;
+                e[&quot;subscription&quot;] = context.Subscription == null ? &quot;&quot; : context.Subscription.Id;
+                e[&quot;callerType&quot;] = (string)v.GetValueOrDefault(&quot;callerType&quot;, &quot;&quot;);
+                e[&quot;callerId&quot;] = (string)v.GetValueOrDefault(&quot;usageId&quot;, &quot;&quot;);
+                e[&quot;callerName&quot;] = (string)v.GetValueOrDefault(&quot;usageName&quot;, &quot;&quot;);
+                e[&quot;model&quot;] = model.Length &gt; 64 ? model.Substring(0, 64) : model;
+                e[&quot;status&quot;] = context.Response == null ? 0 : context.Response.StatusCode;
+                e[&quot;errorSource&quot;] = context.LastError == null ? &quot;&quot; : context.LastError.Source;
+                e[&quot;errorReason&quot;] = context.LastError == null ? &quot;&quot; : context.LastError.Reason;
+                e[&quot;elapsedMs&quot;] = (long)context.Elapsed.TotalMilliseconds;
+                e[&quot;userAgent&quot;] = agent.Length &gt; 100 ? agent.Substring(0, 100) : agent;
+                return e.ToString(Newtonsoft.Json.Formatting.None);
+            } catch {
+                return &quot;{\&quot;error\&quot;:\&quot;security event not built\&quot;}&quot;;
+            }
+        }</log-to-eventhub>

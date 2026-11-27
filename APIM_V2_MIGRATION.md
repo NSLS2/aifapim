@@ -39,7 +39,8 @@ request as work lands.
 | Dev gateway (`aifapimv2.bicep`, Standard v2) | Deployed 2026-11-26, public access Disabled; model smoke test passes through Front Door |
 | Front Door (`modules/front-door.bicep`) | Dev: Premium profile, endpoint, WAF, Private Link approved, custom domain `aifapimv2-dev.nsls2.bnl.gov` validated and serving the RSA certificate chain |
 | DNS records | Not yet: the CNAME to the Front Door endpoint is to be requested; test on the endpoint's `azurefd.net` name |
-| Request body log, Event Hub | Not in the v2 template yet |
+| Event Hub and security events (`modules/event-hub.bicep`, `modules/security-events.bicep`) | In the template, not yet deployed: one JSON event per request from the service-level policy, over a private endpoint, no prompt text |
+| Request body log | Not in the v2 template yet |
 | Prod stack (`aifapimv2`) | Not started |
 | Agent client in the logs and token metrics | Merged from `main`; not tried on v2 |
 
@@ -328,7 +329,16 @@ Dev always goes before prod.
 - [x] Agent client tracking merged from `main`
 - [ ] Request body log in the v2 template (its own storage and workspace per
   stack; its storage private endpoint goes in `pe`, not in the delegated `int`
-  subnet; the Event Hub is not used, so it is left out)
+  subnet)
+- [x] Event Hub with a private endpoint in `pe` and a security event per
+  request (`SecurityEvent_Fragment.xml`, written by the service-level policy
+  `Global_Policy.xml`: after every response and in on-error, so refused
+  requests are in it), a consumer group `alloy-loki` for the log reader (plan:
+  pull into Loki with Alloy), public access Disabled unless
+  `eventHubAllowedIps` is set (dev: the NAT pool)
+- [x] WAF managed rules in the Front Door template: default rule set 2.2 in
+  Prevention, bot manager 1.1, HTTP DDoS 1.0 log only; request body check by
+  `wafInspectRequestBody` (dev: on)
 - [ ] Settings for the prod gateway (network 10.10.0.0/16)
 - [ ] Key copy script (same key values) and the scripts that name the APIM
   resource (companion), v2 entries in `beamline-keys.py`, `test-models.py` and
@@ -344,7 +354,8 @@ Dev always goes before prod.
   again with the `int` subnet
 - [x] Deploy the gateway in steps (bootstrap, approve Front Door, close public
   access, custom domain on Front Door); done 2026-11-26 and 2026-11-27
-- [x] Suspend the built-in `master` subscription by hand
+- [x] Suspend the built-in `master` subscription by hand; the gateway template
+  now declares it suspended
 - [ ] CanNotDelete lock on the resource group
 
 ### Phase 3: test dev
@@ -456,12 +467,13 @@ consider v2. Items are checked in dev (phase 3) and again in prod.
 
 Decided:
 
-- [x] Built-in all-access subscription (`master`) suspended by hand after the
-  first deployment (a template cannot: APIM answers a write with "Can't modify
-  global subscription"); checked on dev. Its keys skip every
-  product policy, including the Entra token check of the agent products.
-  Nothing in a template keeps it suspended, so the check script is run again
-  after each deployment and before prod is announced.
+- [x] Built-in all-access subscription (`master`) suspended, tracing off. Its
+  keys skip every product policy, including the Entra token check of the agent
+  products. `aifapimv2.bicep` declares it with `state: 'suspended'`; APIM
+  refuses to change anything else on it ("Can't modify global subscription"),
+  and the check script is run after each deployment. To settle on dev: whether
+  writing it again gives it new keys (a new stack's first deployment cannot
+  start it suspended, so the first deployment sets the state once)
 - [x] `allowTracing: false` on every subscription the key tooling makes
   (`apim-subscriptions.bicep`, companion repository); the gateway template makes
   none. Checked on dev: `master` and `svc-v2-smoke` both read false. A
@@ -478,8 +490,15 @@ Network:
 - [x] WAF allow-list at Front Door on `SocketAddr`; the policies' allow-list and
   product checks read the same `clientAddress`
 - [ ] Deny outbound Internet on the `int` subnet, once the flows are known
-- [ ] DDoS protection: decide what Front Door Premium gives and whether more is
-  needed (Azure DDoS Protection is not available for the v2 tiers)
+- [x] WAF managed rules (default 2.2, bot manager 1.1, HTTP DDoS 1.0 log only)
+  in the template. To settle on dev: how much of a body the WAF inspects,
+  whether Premium includes the managed rules at no extra charge (the Front Door
+  bill will show), and which of the prompts in the tests it blocks
+- [ ] Decide the WAF body check: on only if real prompts (code, SQL, shell)
+  pass; if not, exclusions or off. Prod follows what dev shows
+- [ ] DDoS protection: decide what Front Door Premium and the HTTP DDoS rule set
+  give and whether more is needed (Azure DDoS Protection is not available for
+  the v2 tiers)
 
 TLS:
 
@@ -502,6 +521,13 @@ Identity and access:
 
 Logging and monitoring:
 
+- [x] Security events: one JSON line per request to the Event Hub (who, what,
+  outcome; no prompt text), over a private endpoint
+- [ ] Decide the destination of the events (SIEM): the plan is Alloy on a host
+  reading the hub into a new Loki tenant (`n2sn-aifapim`, provisional); the
+  data classification, volume, host, port 9093 egress, Alloy's certificate
+  sign-in and the read role are open
+
 - [ ] Gateway and LLM logs to Log Analytics; v2 CPU and memory metrics with an
   alert in place of the Classic capacity metric
 - [x] Activity log export and Key Vault audit log (NSLS2/bicep)
@@ -512,6 +538,11 @@ Logging and monitoring:
 Governance and recovery:
 
 - [ ] CanNotDelete lock and tags on both resource groups
+- [ ] Decide request and response validation: a cap on the request body size
+  and removal of backend headers from responses
+- [ ] Later: a real per-key ceiling (tokens per minute is 10,000,000 today, so
+  it limits nothing) and zone redundancy for prod (reliability pages disagree
+  for Standard v2; not for dev)
 - [ ] The v2 tiers have no backup and restore: the configuration is this
   repository, and the subscription keys are kept as an encrypted snapshot
   (`rotate-keys.py snapshot` in the companion repository) after every change

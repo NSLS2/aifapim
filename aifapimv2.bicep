@@ -13,7 +13,8 @@
 // grantGatewayVaultAccess and leaves apimGatewayHostName empty, a second one sets the host name.
 // With the host name on Front Door the gateway reads no certificate: leave both unset.
 //
-// Not in this template yet: the request body log and the Event Hub (see the plan).
+// The Event Hub takes one security event per request (apim_policies/SecurityEvent_Fragment.xml).
+// Not in this template yet: the request body log (see the plan).
 
 @description('Azure region of the gateway and of the private endpoints. It must be the region of the virtual network.')
 param location string = resourceGroup().location
@@ -134,6 +135,12 @@ param apimNamePrefix string = 'apim'
 
 @description('Host name clients use to reach the gateway through Front Door, such as aifapimv2-dev.nsls2.bnl.gov. Front Door serves the certificate gatewayKeyVaultSecretName from the vault keyVaultName (RSA, with its intermediates), and the host name must be in it. Leave empty for the first deployment: the Front Door identity needs the Key Vault role first.')
 param frontDoorHostName string = ''
+
+@description('Addresses and ranges allowed to read the Event Hub from outside the VNet (the NAT pool, for a reader on site). Empty keeps its public network access Disabled. The gateway writes through the private endpoint either way.')
+param eventHubAllowedIps array = []
+
+@description('Whether the Front Door WAF inspects request bodies. A prompt with code or SQL can look like an attack to the managed rules, so it is on only where a test with real prompts has passed.')
+param wafInspectRequestBody bool = false
 
 @description('Whether the gateway answers on its public address. No default, so every parameter file states it: Enabled only for the bootstrap, Disabled once the Front Door private endpoint connection is approved (APIM refuses to disable it before then, and a deployment that leaves it out resets it to Enabled). The client address check is the same either way.')
 @allowed([
@@ -328,6 +335,8 @@ var unique = uniqueString(resourceGroup().id, subscription().id)
 var apiManagementServiceName = '${apimNamePrefix}-${unique}'
 var logAnalyticsName = 'law-${unique}'
 var applicationInsightsName = 'appIn-${unique}'
+var eventHubNamespaceName = 'ehn-${unique}'
+var eventHubName = 'eh-${unique}'
 
 var azureRoles = loadJsonContent('azure_roles.json')
 
@@ -379,6 +388,31 @@ var anthropicServiceUrlSecondary = 'https://${apiServiceNameSecondary}.services.
 var bflServiceUrlPrimary = 'https://${apiServiceNamePrimary}.${bflEndpointDomain}/providers/blackforestlabs/v1'
 var bflServiceUrlSecondary = 'https://${apiServiceNameSecondary}.${bflEndpointDomain}/providers/blackforestlabs/v1'
 var maiServiceUrl = 'https://${apiServiceNameSecondary}.services.ai.azure.com/mai/v1'
+
+// The Event Hub namespace is reached through a private endpoint in the same subnet as the
+// Foundry ones, with its own privatelink.servicebus.windows.net zone linked to this network.
+module eventHubPrivateDnsZone 'modules/private-dns-zone.bicep' = {
+  name: 'privatelink-servicebus-windows-net'
+  params: {
+    zoneName: 'privatelink.servicebus.windows.net'
+    vnetId: vnet.id
+    tags: tags
+  }
+}
+
+module eventHub 'modules/event-hub.bicep' = {
+  name: 'event-hub'
+  params: {
+    location: location
+    eventHubNamespaceName: eventHubNamespaceName
+    eventHubName: eventHubName
+    tags: tags
+    subnetId: privateEndpointSubnetId
+    privateDnsZoneId: eventHubPrivateDnsZone.outputs.zoneId
+    allowedIps: eventHubAllowedIps
+    consumerGroupName: 'alloy-loki'
+  }
+}
 
 module logAnalyticsWorkspace 'modules/log-analytics-workspace.bicep' = {
   name: 'log-analytics-workspace'
@@ -456,6 +490,7 @@ module frontDoor 'modules/front-door.bicep' = {
     apimHostName: apiManagement.outputs.apiManagementDefaultHostName
     apimLocation: location
     allowedClientIps: wafAllowList(allowedClientIps)
+    inspectRequestBody: wafInspectRequestBody
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
     customDomainHostName: frontDoorHostName
     certificateSourceId: empty(keyVaultName) ? '' : resourceId(subscription().subscriptionId, keyVaultResourceGroup, 'Microsoft.KeyVault/vaults/secrets', keyVaultName, gatewayKeyVaultSecretName)
@@ -478,17 +513,27 @@ module frontDoorKeyVaultAccess 'modules/keyvault-role.bicep' = if (!empty(keyVau
   }
 }
 
+// The built-in all-access subscription (master) is scoped to the whole service, so its keys skip
+// every product policy, including the Entra token check of the agent products. Suspending it is
+// the one change APIM accepts for it, and the template keeps it suspended. Without tracing, as
+// for every key.
+resource masterSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
+  parent: apimServiceRef
+  name: 'master'
+  properties: {
+    displayName: 'Built-in all-access subscription'
+    scope: '${apimServiceRef.id}/'
+    state: 'suspended'
+    allowTracing: false
+  }
+}
+
 resource apimServiceRef 'Microsoft.ApiManagement/service@2024-05-01' existing = {
   name: apiManagementServiceName
   dependsOn: [
     apiManagement
   ]
 }
-
-// The built-in all-access subscription (master) is scoped to the whole service, so its keys skip
-// every product policy, including the Entra token check of the agent products. A template cannot
-// suspend it: APIM answers a write with "Can't modify global subscription". It is suspended by
-// hand after the first deployment (docs/apim-v2-migration.md in aifapim-config).
 
 // The system-assigned identity exists only once APIM does, so this role is written after the
 // APIM module. Only a custom domain on the gateway itself needs it (see the header); with the
@@ -503,6 +548,33 @@ module kvAccess 'modules/keyvault-role.bicep' = if (!empty(keyVaultName) && gran
     principalType: 'ServicePrincipal'
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
   }
+}
+
+// One security event per request to the Event Hub, from the service-level policy.
+resource eventHubNamespaceRef 'Microsoft.EventHub/namespaces@2024-01-01' existing = {
+  name: eventHubNamespaceName
+  dependsOn: [ eventHub ]
+}
+
+resource eventHubsDataSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(subscription().id, resourceGroup().id, eventHubNamespaceName, 'DataSender')
+  scope: eventHubNamespaceRef
+  properties: {
+    principalId: apiManagement.outputs.apiManagementIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', azureRoles.AzureEventHubsDataSender)
+  }
+}
+
+module securityEvents 'modules/security-events.bicep' = {
+  name: 'security-events'
+  params: {
+    apimName: apiManagementServiceName
+    eventHubNamespaceName: eventHubNamespaceName
+    eventHubName: eventHubName
+    policyXml: replace(loadTextContent('apim_policies/Global_Policy.xml'), '<!-- __SECURITY_EVENT__ -->', loadTextContent('apim_policies/SecurityEvent_Fragment.xml'))
+  }
+  dependsOn: [ eventHubsDataSender ]
 }
 
 module api 'modules/api.bicep' = {

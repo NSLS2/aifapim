@@ -34,6 +34,18 @@ param customDomainHostName string = ''
 @description('Resource ID of the Key Vault secret behind the certificate, in the subscription of this profile. The certificate must be RSA, with its intermediate certificates.')
 param certificateSourceId string = ''
 
+@description('Whether the WAF inspects request bodies. A prompt with code or SQL can look like an attack to the managed rules, so turn it on only after a test with real prompts.')
+param inspectRequestBody bool = false
+
+@description('Version of the Microsoft default rule set (OWASP-based).')
+param defaultRuleSetVersion string = '2.2'
+
+@description('Version of the Microsoft bot manager rule set.')
+param botManagerRuleSetVersion string = '1.1'
+
+@description('Version of the HTTP DDoS rule set. It only logs.')
+param ddosRuleSetVersion string = '1.0'
+
 param tags object = {}
 
 var useCustomDomain = !empty(customDomainHostName)
@@ -86,6 +98,7 @@ resource endpoint 'Microsoft.Cdn/profiles/afdEndpoints@2024-02-01' = {
   properties: { enabledState: 'Enabled' }
 }
 
+// The allow-list custom rule runs first, so the managed rules only see listed clients.
 // SocketAddr is the address of the connection that reached Front Door. RemoteAddr would follow
 // X-Forwarded-For, which any caller can set.
 resource waf 'Microsoft.Network/frontDoorWebApplicationFirewallPolicies@2024-02-01' = {
@@ -94,7 +107,18 @@ resource waf 'Microsoft.Network/frontDoorWebApplicationFirewallPolicies@2024-02-
   tags: tags
   sku: { name: 'Premium_AzureFrontDoor' }
   properties: {
-    policySettings: { enabledState: 'Enabled', mode: 'Prevention' }
+    policySettings: {
+      enabledState: 'Enabled'
+      mode: 'Prevention'
+      requestBodyCheck: inspectRequestBody ? 'Enabled' : 'Disabled'
+    }
+    managedRules: {
+      managedRuleSets: [
+        { ruleSetType: 'Microsoft_DefaultRuleSet', ruleSetVersion: defaultRuleSetVersion, ruleSetAction: 'Block' }
+        { ruleSetType: 'Microsoft_BotManagerRuleSet', ruleSetVersion: botManagerRuleSetVersion }
+        { ruleSetType: 'Microsoft_HTTPDDoSRuleSet', ruleSetVersion: ddosRuleSetVersion, ruleSetAction: 'Log' }
+      ]
+    }
     customRules: {
       rules: [
         {

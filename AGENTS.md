@@ -690,12 +690,16 @@ Fetch the keys with
   has more than one unit (Premium), and AMQP (TCP 5671-5672, 330) to the Event
   Hub private endpoint.
 - **Event Hub**: `modules/event-hub.bicep` creates a namespace with local auth
-  and public network access disabled, reached only through a private endpoint
+  and public network access disabled (unless `allowedIps` is set, v2 only),
+  reached only through a private endpoint
   (group `namespace`) in the `openai` subnet of `regions[0]` and registered in
   `privatelink.servicebus.windows.net`, linked to that VNet. Private endpoints
   need the Standard or Premium SKU. The namespace and the APIM Data Sender role
-  are provisioned, but no APIM logger sends to it yet (only the Application
-  Insights logger exists); it is not used by `aifapim-config`.
+  are provisioned, but on Classic no APIM logger sends to it (only the
+  Application Insights logger exists). On v2, `modules/security-events.bicep`
+  adds an `azureEventHub` logger on the gateway identity and a service-level
+  policy that writes one JSON event per request (no prompt text) after every
+  response and in on-error.
 - **Request body log** (`requestBodyLogging`, off by default): the built-in
   LLM log (`ApiManagementGatewayLlmLog`) drops the prompt of Anthropic requests
   whose `system` field is a list of blocks (measured 2026-10: a plain-string
@@ -796,7 +800,8 @@ modules/
   api.bicep                     # All five inference APIs, the catalog API, backends, product, diagnostics
   app-insights.bicep            # Application Insights
   cognitive-services-role.bicep # Cognitive Services / AI User RBAC for APIM system identity
-  event-hub.bicep               # Event Hub namespace (private endpoint only; not wired to an APIM logger yet)
+  event-hub.bicep               # Event Hub namespace: private endpoint; public access only for an IP list; optional consumer group
+  security-events.bicep         # v2: Event Hub logger and the service-level policy that writes one event per request
   keyvault-role.bicep           # Key Vault RBAC for the APIM system-assigned identity
   llm-latency-alerts.bicep      # Scheduled-query latency alerts on ApiManagementGatewayLogs
   log-analytics-workspace.bicep # Log Analytics workspace
