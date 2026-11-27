@@ -127,6 +127,9 @@ param foundryAccounts array
 @description('Prefix of the API Management instance name, which is <prefix>-<unique>. A dev prefix with dev in it gives a default host name that the dev smoke test accepts.')
 param apimNamePrefix string = 'apim'
 
+@description('Host name clients use to reach the gateway through Front Door, such as aifapimv2-dev.nsls2.bnl.gov. Front Door serves the certificate gatewayKeyVaultSecretName from the vault keyVaultName (RSA, with its intermediates), and the host name must be in it. Leave empty for the first deployment: the Front Door identity needs the Key Vault role first.')
+param frontDoorHostName string = ''
+
 @description('Whether the gateway answers on its public address. Disable it once the Front Door private endpoint connection is approved: APIM refuses to disable it before then, and a deployment that leaves it out resets it to Enabled. The client address check is the same either way.')
 @allowed([
   'Enabled'
@@ -449,7 +452,24 @@ module frontDoor 'modules/front-door.bicep' = {
     apimLocation: location
     allowedClientIps: wafAllowList(allowedClientIps)
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
+    customDomainHostName: frontDoorHostName
+    certificateSourceId: empty(keyVaultName) ? '' : resourceId(subscription().subscriptionId, keyVaultResourceGroup, 'Microsoft.KeyVault/vaults/secrets', keyVaultName, gatewayKeyVaultSecretName)
     tags: tags
+  }
+}
+
+// Front Door reads the certificate with its own identity, which belongs to the profile, so the role is
+// written after the Front Door module. The secret and the domain only appear when frontDoorHostName
+// is set, in a second deployment, once the role is in place (as for the gateway's own domain).
+module frontDoorKeyVaultAccess 'modules/keyvault-role.bicep' = if (!empty(keyVaultName)) {
+  name: 'kvSecretUserForFrontDoor'
+  scope: resourceGroup(keyVaultResourceGroup)
+  params: {
+    keyVaultName: keyVaultName
+    roleName: guid(subscription().id, keyVaultName, 'afd-${unique}', 'KeyVaultSecretUser', 'system-assigned')
+    principalId: frontDoor.outputs.identityPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
   }
 }
 

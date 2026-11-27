@@ -28,7 +28,15 @@ param allowedClientIps array
 @description('Resource ID of the Log Analytics workspace for the access, health probe and WAF logs.')
 param logAnalyticsWorkspaceId string
 
+@description('Host name clients use, such as aifapimv2-dev.nsls2.bnl.gov. Leave empty for the first deployment: the profile identity needs the Key Vault role before the certificate can be read.')
+param customDomainHostName string = ''
+
+@description('Resource ID of the Key Vault secret behind the certificate, in the subscription of this profile. The certificate must be RSA, with its intermediate certificates.')
+param certificateSourceId string = ''
+
 param tags object = {}
+
+var useCustomDomain = !empty(customDomainHostName)
 
 // Front Door waits this long for the first byte from the gateway, and for each pause in a body
 // afterwards. Its maximum is 240 seconds.
@@ -37,7 +45,37 @@ resource profile 'Microsoft.Cdn/profiles@2024-02-01' = {
   location: 'global'
   tags: tags
   sku: { name: 'Premium_AzureFrontDoor' }
+  identity: { type: 'SystemAssigned' }
   properties: { originResponseTimeoutSeconds: 240 }
+}
+
+// Front Door reads the certificate from Key Vault with this identity (Key Vault Secrets User, granted
+// in the parent template).
+resource certificate 'Microsoft.Cdn/profiles/secrets@2024-02-01' = if (useCustomDomain) {
+  parent: profile
+  name: 'gateway-certificate'
+  properties: {
+    parameters: {
+      type: 'CustomerCertificate'
+      secretSource: { id: certificateSourceId }
+      useLatestVersion: true
+    }
+  }
+}
+
+// With a certificate whose name matches the host name, Front Door approves the domain itself: no
+// DNS validation record is needed. The CNAME to the endpoint is what moves traffic.
+resource customDomain 'Microsoft.Cdn/profiles/customDomains@2024-02-01' = if (useCustomDomain) {
+  parent: profile
+  name: replace(customDomainHostName, '.', '-')
+  properties: {
+    hostName: customDomainHostName
+    tlsSettings: {
+      certificateType: 'CustomerCertificate'
+      minimumTlsVersion: 'TLS12'
+      secret: { id: certificate.id }
+    }
+  }
 }
 
 resource endpoint 'Microsoft.Cdn/profiles/afdEndpoints@2024-02-01' = {
@@ -119,6 +157,7 @@ resource route 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = {
   dependsOn: [ origin ]
   properties: {
     originGroup: { id: originGroup.id }
+    customDomains: useCustomDomain ? [ { id: customDomain.id } ] : []
     supportedProtocols: [ 'Https' ]
     patternsToMatch: [ '/*' ]
     forwardingProtocol: 'HttpsOnly'
@@ -135,7 +174,10 @@ resource security 'Microsoft.Cdn/profiles/securityPolicies@2024-02-01' = {
       type: 'WebApplicationFirewall'
       wafPolicy: { id: waf.id }
       associations: [
-        { domains: [ { id: endpoint.id } ], patternsToMatch: [ '/*' ] }
+        {
+          domains: concat([ { id: endpoint.id } ], useCustomDomain ? [ { id: customDomain.id } ] : [])
+          patternsToMatch: [ '/*' ]
+        }
       ]
     }
   }
@@ -155,3 +197,4 @@ resource logs 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
 }
 
 output endpointHostName string = endpoint.properties.hostName
+output identityPrincipalId string = profile.identity.principalId
