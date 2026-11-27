@@ -352,6 +352,12 @@ Done:
   verified, TLS 1.3
 - [x] Hardening check script: portal off, no secrets, Foundry local auth off,
   tracing off
+- [x] Front Door access and WAF logs arrive in the v2 workspace (212 and 110
+  rows in 48 hours, newest 2026-11-27 08:54 EST, in `AzureDiagnostics`). No
+  health probe rows appeared: check whether probes run for a single origin
+- [x] `model-router`: the live routers of dev and prod route across 12 models,
+  `gpt-6-luna` among them. The settings listed 8, so they were corrected (and
+  the router catalogs regenerated); see aifapim-config
 
 To do:
 
@@ -365,7 +371,6 @@ To do:
 - [ ] Anthropic token metering and the logging gaps versus Classic
 - [ ] CPU and memory of one unit, including a repeat of the 55 requests per
   second burst
-- [ ] Front Door access and WAF logs arrive in the v2 workspace
 - [ ] Request log, certificate renewal, expiry alert
 - [ ] Rollback test: bind the v2 host name on Classic dev, then move DNS to
   Classic and back
@@ -475,18 +480,20 @@ Governance and recovery:
 
 ## Open questions
 
-- `model-router` answered `gpt-6-luna`, which is outside the settings' routing
-  list; Classic dev logged the same after a Foundry write at 21:34 EST on 26
-  November. Read the live deployment's routing configuration and fix the shared
-  settings.
+- Who or what widened the live router lists from 8 to 12 models (the router
+  version is updated in place by Microsoft, and the activity log showed no write
+  to read with the read-only identity). The settings now match the live
+  routers.
 - The real `User-Agent` strings of opencode, Claude Code and Codex, and whether
   the token metrics keep all their dimensions on v2: the policies name 8, 5 with
   values, and the documented limit is 5 custom dimensions per policy (phase 3).
 - Hermes egress addresses and the prod allow-list for the prod WAF.
 - Whether Front Door's access and WAF logs reach the v2 workspace, and what the
   Front Door request and transfer charges come to.
-- CPU and memory of one Standard v2 unit under a burst, and whether a second
-  unit is billed at the secondary-unit rate.
+- CPU and memory of one Standard v2 unit under a burst (`afd-burst-test.py`;
+  the peaks over the 24 hours to 2026-11-27 were 28% CPU and 5% memory, with
+  no burst test run),
+  and whether a second unit is billed at the secondary-unit rate.
 - The effect of deny-Internet outbound on the integrated instance (phase 3).
 - Whether the Front Door custom-domain deployment (more than 15 minutes) and the
   30 minutes Front Door takes to publish a change are acceptable for the prod
