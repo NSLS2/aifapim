@@ -138,7 +138,20 @@ Fetch the keys with
   (label `eus2`, primary index 1). **`regions[1]` (eastus2) is the primary
   backend**; eastus is the failover.
 - **Four APIs** exposed via APIM, all using `x-api-key` header
-  (not `Authorization: Bearer`):
+  (not `Authorization: Bearer`). **Do not pass the key to the Anthropic Python
+  SDK as `api_key=`.** From `anthropic` 2.0 (2026-10-21) that is sent as
+  `Authorization: Bearer`, and the gateway answers `401
+  SubscriptionKeyNotFound` ("missing subscription key"); the SDK's 0.x and
+  1.x send it as `x-api-key`. With `default_headers={"x-api-key": key}` as
+  well, 0.x joins both into `x-api-key: KEY, KEY` (and a placeholder
+  `api_key` into `placeholder, KEY`). The form that is right on every version
+  is `Anthropic(auth_token="placeholder", default_headers={"x-api-key": key})`
+  (checked offline against 0.111.0, 0.116.0, 2.0.0 and 2.9.0, also with
+  `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` exported: the key header is
+  still `KEY` alone, and the explicit `auth_token` replaces
+  `ANTHROPIC_AUTH_TOKEN`). First seen
+  2026-11-16, from a user who installed the SDK with `pip` instead of using
+  the locked pixi environment:
   - `azure-openai-service-api` — path `""` (root), OpenAI Chat/Completions,
     plus `GET /models?api-version=...` and
     `GET /models/{model_id}?api-version=...` (classic AOAI listing).
