@@ -27,12 +27,16 @@ resource logAnalyticcsWorkspace 'Microsoft.OperationalInsights/workspaces@2020-0
   }
 }
 
-resource llmLogTable 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+resource llmLogTable 'Microsoft.OperationalInsights/workspaces/tables@2026-03-01' = {
   parent: logAnalyticcsWorkspace
   name: 'ApiManagementGatewayLlmLog'
   properties: {
     retentionInDays: retentionInDays
     totalRetentionInDays: llmLogTotalRetentionInDays
+    // Prompts and answers: only a role with a data action reads it (Privileged Monitoring Data Reader),
+    // so Reader, Contributor and Owner, and the Grafana app, get no rows. A preview. The API version
+    // matters: 2025-02-01 and older accept the property and silently drop it.
+    protectionLevel: 'Protected'
   }
 }
 
