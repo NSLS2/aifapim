@@ -547,6 +547,9 @@ module apiManagement 'modules/api-management-v2.bicep' = {
 // only then can publicNetworkAccess be set to Disabled.
 module frontDoor 'modules/front-door.bicep' = {
   name: 'front-door'
+  dependsOn: [
+    frontDoorExtraKeyVaultAccess
+  ]
   params: {
     profileName: 'afd-${unique}'
     endpointName: '${apimNamePrefix}-${unique}'
@@ -586,6 +589,15 @@ module frontDoorKeyVaultAccess 'modules/keyvault-role.bicep' = if (!empty(keyVau
   }
 }
 
+// The roles for the extra names are written before the Front Door module, which reads each secret
+// when it creates it and fails without the role. So the principal comes from the profile as it
+// already is, not from the module output. A stack gets its first extra name after its first
+// deployment, as it does for frontDoorHostName. Key Vault can take a minute to honour a new role: if
+// the first deployment still fails reading a secret, run it again.
+resource frontDoorProfile 'Microsoft.Cdn/profiles@2024-02-01' existing = {
+  name: 'afd-${unique}'
+}
+
 module frontDoorExtraKeyVaultAccess 'modules/keyvault-role.bicep' = [for d in frontDoorExtraDomains: if (!empty(keyVaultName)) {
   name: 'kvSecretUserForFrontDoor-${replace(d.hostName, '.', '-')}'
   scope: resourceGroup(keyVaultResourceGroup)
@@ -593,7 +605,7 @@ module frontDoorExtraKeyVaultAccess 'modules/keyvault-role.bicep' = [for d in fr
     keyVaultName: keyVaultName
     secretName: d.secretName
     roleName: guid(subscription().id, keyVaultName, 'afd-${unique}', 'KeyVaultSecretUser', d.secretName)
-    principalId: frontDoor.outputs.identityPrincipalId
+    principalId: frontDoorProfile.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
   }

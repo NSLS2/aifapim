@@ -34,7 +34,7 @@ param customDomainHostName string = ''
 @description('Resource ID of the Key Vault secret behind the certificate, in the subscription of this profile. The certificate must be RSA, with its intermediate certificates.')
 param certificateSourceId string = ''
 
-@description('Further host names this profile serves, each { hostName, certificateSourceId } (the secret in the same form as certificateSourceId). Each gets its own certificate secret and custom domain on the same route and WAF policy. Add them once the profile identity has the Key Vault role on each secret, which the parent template grants in the same deployment: if the first deployment fails reading a secret, run it again.')
+@description('Further host names this profile serves, each { hostName, certificateSourceId } (the secret in the same form as certificateSourceId). Each gets its own certificate secret and custom domain on the same route and WAF policy. The parent template writes the Key Vault role on each secret before this module runs.')
 param extraDomains array = []
 
 @description('First path segments the gateway serves, without a leading slash (for example openai, or providers/blackforestlabs/v1). The KnownPathsOnly rule acts on any other path: scanners ask for /, /.git, /wp-admin and the like. Empty creates no such rule.')
