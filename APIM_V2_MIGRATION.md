@@ -243,6 +243,61 @@ failed on it (a NAT gateway), see `AGENTS.md`.
   networks are not connected to the BNL network. Front Door gives the same
   inbound control without the exemption.
 
+## Public access and threat model
+
+Decided 2026-11-28. Each stack serves its Front Door endpoint and four names, so
+a cutover is a DNS change and a rollback is the reverse:
+
+| Stack | Names |
+| --- | --- |
+| prod | `aifapimv2`, `aifapim`, `hermes`, `aigw` |
+| dev | `aifapimv2-dev`, `aifapim-dev`, `hermes-dev`, `aigw-dev` |
+
+`aigw` is the new public name that replaces `hermes` (which is now the name of
+an AI product). `hermes` stays for a notice period, then goes. Each name has its
+own RSA 4096 certificate (the ansible certificates playbook) and its own Front
+Door secret, domain and secret-scoped Key Vault role. No SAN or wildcard
+certificate: Hermes' current `*.nsls2.bnl.gov` certificate stays on its WAF.
+
+**Access.** Prod is public with a key: no address allow-list in the WAF or in the
+gateway. Dev is locked to the NSLS-II NAT pool. The products
+`nsls2aifapim-services-internal` and `nsls2aifapim-services-agents` are locked to
+the NAT pool on both stacks (a check in the product policy). The template
+creates the WAF allow-list rule and the global gateway address check only when
+`allowedClientIps` is not empty.
+
+**Edge rules for the public names**, each starting on Log and moving to Block
+after a clean week in the WAF log: a key header is required (except on the
+health path), only the known API paths and the GET and POST methods are allowed,
+and a rate limit per address, set from the Hermes traffic on Classic (twice to
+three times the peak; Microsoft advises a high threshold and a 5-minute window).
+The managed rules exclude the four key headers. Request body inspection stays
+off: a prompt with code, SQL or a shell command looks like an attack to the
+managed rules.
+
+**Accepted risks.** A valid key works from anywhere on prod from deploy day, with
+the key, the WAF and the product locks as the controls. A key revoked on Classic
+stays valid on v2 until the next `copy-keys-to-v2.py` run, so the weekly run
+needs `--prune`. The rules of Hermes' current WAF (sigsci) are not carried over.
+Answers have no write-once copy (see the follow-up page).
+
+### OWASP Top 10 for LLM applications (2025)
+
+| Risk | Where it is handled |
+| --- | --- |
+| LLM01 Prompt injection | Not at the gateway: the application or agent that holds the tools. A pattern filter here blocks real work. A Content Safety study is open. |
+| LLM02 Sensitive information disclosure | Part: the gateway logs prompts, restricts who reads the logs (Grafana limited to its tables), and an offline secret scan is planned. Which data people send is policy and training. |
+| LLM03 Supply chain | Hosted models only; a model joins the catalog by approval. |
+| LLM04 Data and model poisoning | Does not apply: no training or fine-tuning here. |
+| LLM05 Improper output handling | The application that uses the answer. |
+| LLM06 Excessive agency | The agent and its tools, not the gateway. |
+| LLM07 System prompt leakage | Prompts are stored write-once with restricted access; the gateway adds none of its own. |
+| LLM08 Vector and embedding weaknesses | Not at the gateway; embeddings are proxied as they come. |
+| LLM09 Misinformation | The user and the application. |
+| LLM10 Unbounded consumption | The gateway: token limit per key, image and audio request limits, the Front Door rate limit, per-key anomaly alerts (planned). |
+
+The follow-up work is in `aifapim-config/docs/llm-security-follow-up.md`.
+
 ## Certificates
 
 - All four gateway certificates (`aifapim`, `aifapim-dev`, `aifapimv2`,
@@ -288,7 +343,9 @@ Classic `apim` subnets and, since 2026-11-26, the dev `agw` subnet.
 - The gateway's public network access is Disabled in the running state;
   bootstrap needs it Enabled for one deployment.
 - Stacks: gateway only, reusing the Foundry accounts; names as in the table.
-- Host name and certificate on Front Door, RSA only.
+- Host name and certificate on Front Door, RSA only. Four names per stack, one
+  certificate each, public with a key on prod (see "Public access and threat
+  model").
 - A separate Log Analytics workspace per stack, and a v2 Grafana dashboard
   without cost panels; one dashboard and the cost ingest move when Classic is
   gone. The request body log is assumed to get its own storage and workspace
@@ -631,7 +688,9 @@ Governance and recovery:
   routers.
 - The real `User-Agent` strings of opencode, Claude Code and Codex (phase 3).
   The token metrics keep all their dimensions on v2: checked against Classic.
-- Hermes egress addresses and the prod allow-list for the prod WAF.
+- Hermes egress addresses: no longer needed for an allow-list (prod is public
+  with a key). What Hermes' WAF (sigsci) does today is not known; the edge rules
+  and the rate limit are set from the Hermes traffic in the Classic gateway log.
 - What the Front Door request and transfer charges come to (its access and WAF
   logs reach the v2 workspace).
 - CPU and memory of one Standard v2 unit under calls that reach a model (the
