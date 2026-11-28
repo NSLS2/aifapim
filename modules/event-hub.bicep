@@ -14,6 +14,17 @@ param privateDnsZoneId string
 @description('Region of the private endpoint. Must be the region of the subnet virtual network.')
 param privateEndpointLocation string = location
 
+@description('Addresses and ranges allowed to reach the public endpoint, for a reader outside the VNet. Empty (and no trusted services) keeps public network access Disabled. Traffic through the private endpoint is not affected.')
+param allowedIps array = []
+
+@description('Let trusted Azure services past the firewall. API Management needs it: its management plane tests the connection from outside the VNet when it creates a logger. The gateway itself sends through the private endpoint.')
+param allowTrustedServices bool = false
+
+@description('Consumer group to create for a reader. Empty creates none ($Default always exists).')
+param consumerGroupName string = ''
+
+var useRules = !empty(allowedIps) || allowTrustedServices
+
 resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
   name: eventHubNamespaceName
   location: location
@@ -25,13 +36,29 @@ resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
   properties: {
     disableLocalAuth: true
     minimumTlsVersion: '1.2'
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: useRules ? 'Enabled' : 'Disabled'
   }
 }
 
 resource eventHub 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = {
   parent: eventHubNamespace
   name: eventHubName
+}
+
+resource consumerGroup 'Microsoft.EventHub/namespaces/eventhubs/consumergroups@2024-01-01' = if (!empty(consumerGroupName)) {
+  parent: eventHub
+  name: consumerGroupName
+}
+
+resource networkRules 'Microsoft.EventHub/namespaces/networkRuleSets@2024-01-01' = if (useRules) {
+  parent: eventHubNamespace
+  name: 'default'
+  properties: {
+    publicNetworkAccess: 'Enabled'
+    defaultAction: 'Deny'
+    trustedServiceAccessEnabled: allowTrustedServices
+    ipRules: [for ip in allowedIps: { ipMask: ip, action: 'Allow' }]
+  }
 }
 
 // Private endpoint into the VNet; without it the namespace has no data-plane

@@ -446,7 +446,8 @@ modules/
   api.bicep                     # API definitions, backends, product, diagnostics
   app-insights.bicep            # Application Insights
   cognitive-services-role.bicep # Cognitive Services / AI User RBAC for APIM system identity
-  event-hub.bicep               # Event Hub namespace (private endpoint only; not wired to an APIM logger yet)
+  event-hub.bicep               # Event Hub namespace: private endpoint; public access only for an IP list; optional consumer group
+  security-events.bicep         # v2: Event Hub logger and the service-level policy that writes one event per request
   keyvault-role.bicep           # Key Vault RBAC for the APIM system-assigned identity
   llm-latency-alerts.bicep      # Scheduled-query latency alerts on ApiManagementGatewayLogs
   log-analytics-workspace.bicep # Log Analytics workspace

@@ -6,6 +6,13 @@ param logAnalyticsName string
 @minValue(30)
 @maxValue(730)
 param retentionInDays int = 365
+
+// The gateway's built-in LLM log (prompts and answers) is kept 12 years, the most Log Analytics
+// keeps: searchable for retentionInDays, then in long-term storage. Set on the table, because
+// the workspace setting alone would delete it after retentionInDays.
+@minValue(30)
+@maxValue(4383)
+param llmLogTotalRetentionInDays int = 4383
 param tags object = {}
 
 resource logAnalyticcsWorkspace 'Microsoft.OperationalInsights/workspaces@2020-08-01' = {
@@ -17,6 +24,19 @@ resource logAnalyticcsWorkspace 'Microsoft.OperationalInsights/workspaces@2020-0
       name: 'PerGB2018'
     }
     retentionInDays: retentionInDays
+  }
+}
+
+resource llmLogTable 'Microsoft.OperationalInsights/workspaces/tables@2026-03-01' = {
+  parent: logAnalyticcsWorkspace
+  name: 'ApiManagementGatewayLlmLog'
+  properties: {
+    retentionInDays: retentionInDays
+    totalRetentionInDays: llmLogTotalRetentionInDays
+    // Prompts and answers: only a role with a data action reads it (Privileged Monitoring Data Reader),
+    // so Reader, Contributor and Owner, and the Grafana app, get no rows. A preview. The API version
+    // matters: 2025-02-01 and older accept the property and silently drop it.
+    protectionLevel: 'Protected'
   }
 }
 

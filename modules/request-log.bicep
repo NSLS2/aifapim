@@ -43,6 +43,13 @@ param applicationInsightsConnectionString string
 @description('Maximum number of function instances.')
 param maximumInstanceCount int = 4
 
+@description('SKU of the data and host storage accounts. Standard_ZRS in a zone redundant stack.')
+@allowed([
+  'Standard_LRS'
+  'Standard_ZRS'
+])
+param storageSkuName string = 'Standard_LRS'
+
 param immutabilityPeriodDays int = 146000
 param manageImmutabilityPolicy bool = true
 param coldAfterDays int = 7
@@ -99,6 +106,7 @@ module storage 'request-log-storage.bicep' = {
     subnetId: privateEndpointSubnetId
     blobPrivateDnsZoneId: blobZone.outputs.zoneId
     readerIps: readerIps
+    storageSkuName: storageSkuName
     immutabilityPeriodDays: immutabilityPeriodDays
     manageImmutabilityPolicy: manageImmutabilityPolicy
     coldAfterDays: coldAfterDays
@@ -120,6 +128,7 @@ module loader 'request-log-function.bicep' = {
     queuePrivateDnsZoneId: queueZone.outputs.zoneId
     tablePrivateDnsZoneId: tableZone.outputs.zoneId
     hostStorageAccountName: 'stllmfn${uniqueSuffix}'
+    hostStorageSkuName: storageSkuName
     dataStorageAccountName: storage.outputs.name
     dataContainerName: storage.outputs.containerName
     dceLogsIngestionEndpoint: workspace.outputs.dceLogsIngestionEndpoint

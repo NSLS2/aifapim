@@ -25,6 +25,13 @@ param tablePrivateDnsZoneId string
 @description('Name of the storage account that holds the function host files, deployment package and the event queue.')
 param hostStorageAccountName string
 
+@description('SKU of the host storage account (see storageSkuName in request-log-storage.bicep).')
+@allowed([
+  'Standard_LRS'
+  'Standard_ZRS'
+])
+param hostStorageSkuName string = 'Standard_LRS'
+
 @description('Name of the data storage account that holds the request bodies (read-only for the function).')
 param dataStorageAccountName string
 
@@ -136,7 +143,7 @@ resource hostStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   tags: tags
   kind: 'StorageV2'
   sku: {
-    name: 'Standard_LRS'
+    name: hostStorageSkuName
   }
   properties: {
     accessTier: 'Hot'

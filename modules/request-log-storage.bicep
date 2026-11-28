@@ -28,16 +28,26 @@ param immutabilityPeriodDays int = 146000
 @description('Whether this template creates and updates the immutability policy. Set to false once the policy has been locked: a locked policy can only be extended, so redeploying it unchanged could fail.')
 param manageImmutabilityPolicy bool = true
 
+@description('SKU of the storage account. Standard_ZRS keeps the blobs through the loss of a zone. It is set when the account is created: an existing account is not converted by a deployment.')
+@allowed([
+  'Standard_LRS'
+  'Standard_ZRS'
+])
+param storageSkuName string = 'Standard_LRS'
+
 @description('Move blobs to the Cold tier this many days after creation.')
 @minValue(1)
 param coldAfterDays int = 7
 
-@description('Move blobs to the Archive tier this many days after creation. Must be later than coldAfterDays.')
+@description('Move blobs to the Archive tier this many days after creation. Must be later than coldAfterDays. Ignored when storageSkuName is zone redundant (Archive is not available there).')
 @minValue(2)
 param archiveAfterDays int = 90
 
 @description('Resource ID of a Log Analytics workspace that receives blob read, write and delete audit logs (never the request content). Leave empty to skip.')
 param auditWorkspaceId string = ''
+
+// The Archive tier does not exist on zone redundant accounts (ZRS, GZRS, RA-GZRS): their blobs stay in Cold.
+var archiveSupported = !contains(storageSkuName, 'ZRS')
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName
@@ -45,7 +55,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   tags: tags
   kind: 'StorageV2'
   sku: {
-    name: 'Standard_LRS'
+    name: storageSkuName
   }
   properties: {
     accessTier: 'Hot'
@@ -130,14 +140,15 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
               ]
             }
             actions: {
-              baseBlob: {
+              baseBlob: union({
                 tierToCold: {
                   daysAfterCreationGreaterThan: coldAfterDays
                 }
+              }, archiveSupported ? {
                 tierToArchive: {
                   daysAfterCreationGreaterThan: archiveAfterDays
                 }
-              }
+              } : {})
             }
           }
         }

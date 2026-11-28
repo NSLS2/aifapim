@@ -160,6 +160,11 @@ function SecondaryOnlyBody($xml, $list) {
 }
 [xml]$trace = '<r>' + ((Get-Content -Raw (Join-Path $PolicyDir 'UsageTrace_Fragment.xml')) -replace '<!--[\s\S]*?-->', '') + '</r>'
 [xml]$reqlog = '<r>' + ((Get-Content -Raw (Join-Path $PolicyDir 'RequestBodyLog_Fragment.xml')) -replace '<!--[\s\S]*?-->', '') + '</r>'
+[xml]$secEvent = '<r>' + ((Get-Content -Raw (Join-Path $PolicyDir 'SecurityEvent_Fragment.xml')) -replace '<!--[\s\S]*?-->', '') + '</r>'
+function EventBody($xml) {
+    $v = $xml.SelectSingleNode('//log-to-eventhub').InnerText.Trim()
+    return $v.Substring(2, $v.Length - 3)
+}
 function HeaderBody($xml, $name) {
     $v = ($xml.SelectNodes('//set-header') | Where-Object { $_.name -eq $name } | Select-Object -First 1).value.Trim()
     if ($v.StartsWith('@{') -and $v.EndsWith('}')) { return $v.Substring(2, $v.Length - 3) }
@@ -175,7 +180,9 @@ using System; using System.Collections.Generic; using System.Linq; using Newtons
 public class Hdrs { public Dictionary<string,string> d = new Dictionary<string,string>(); public string GetValueOrDefault(string k, string def){ return d.ContainsKey(k)? d[k]:def; } }
 public class Bdy { public string text = ""; public T As<T>(bool preserveContent = false) { if (typeof(T)==typeof(JObject)) return (T)(object)JObject.Parse(text); if (typeof(T)==typeof(byte[])) return (T)(object)System.Text.Encoding.UTF8.GetBytes(text); throw new Exception("type"); } }
 public class UrlInfo { public string Path = "/"; }
-public class Req { public Hdrs Headers = new Hdrs(); public Bdy Body = new Bdy(); public UrlInfo Url = new UrlInfo(); }
+public class Req { public Hdrs Headers = new Hdrs(); public Bdy Body = new Bdy(); public UrlInfo Url = new UrlInfo(); public UrlInfo OriginalUrl = new UrlInfo(); public string IpAddress = "203.0.113.9"; public string Method = "POST"; }
+public class RespInfo { public int StatusCode = 200; }
+public class ErrInfo { public string Source = ""; public string Reason = ""; }
 public class Vars {
   public Dictionary<string,object> d = new Dictionary<string,object>();
   public T GetValueOrDefault<T>(string k, T def) { return d.ContainsKey(k) && d[k] is T ? (T)d[k] : def; }
@@ -186,7 +193,7 @@ public class Jwt { public Claims Claims = new Claims(); }
 public class Sub { public string Id; public string Name; }
 public class ApiInfo { public string Name = "Anthropic Service API"; }
 public class ProdInfo { public string Id; }
-public class Ctx { public Req Request = new Req(); public Vars Variables = new Vars(); public Sub Subscription; public ApiInfo Api = new ApiInfo(); public ProdInfo Product; public Guid RequestId = Guid.NewGuid(); }
+public class Ctx { public Req Request = new Req(); public Vars Variables = new Vars(); public Sub Subscription; public ApiInfo Api = new ApiInfo(); public ProdInfo Product; public Guid RequestId = Guid.NewGuid(); public RespInfo Response = new RespInfo(); public ErrInfo LastError; public TimeSpan Elapsed = TimeSpan.FromMilliseconds(5); }
 public static class Ext {
   public static Jwt AsJwt(this string s) {
     try {
@@ -215,6 +222,7 @@ public static class Pol {
   public static object StreamMeta(Ctx context) { $(HeaderBody $reqlog 'x-ms-meta-stream') }
   public static object LogContentType(Ctx context) { $(HeaderBody $reqlog 'x-ms-blob-content-type') }
   public static object LogBody(Ctx context) { $(SetBodyCode $reqlog) }
+  public static object SecurityEvent(Ctx context) { $(EventBody $secEvent) }
 $(($metaNames | ForEach-Object { '  public static object Meta' + $_ + '(Ctx context) { ' + (MetaBody $trace $_) + ' }' }) -join "`n")
 }
 "@
@@ -377,6 +385,28 @@ $c.Request.Url.Path = '/deployments/gpt-4o-transcribe/audio/transcriptions'; $c.
 Check ([Text.Encoding]::UTF8.GetString([Pol]::LogBody($c)) -eq 'audio upload not stored, content-length=12') 'request body log: the declared size is reduced to digits'
 $c.Request.Headers.d.Remove('Content-Length')
 Check ([Text.Encoding]::UTF8.GetString([Pol]::LogBody($c)) -eq 'audio upload not stored, content-length=-') 'request body log: no declared size gives a dash'
+
+# The security event names the caller: the address as the API policies resolve it, and key or keyless.
+function Event($c) { return [Pol]::SecurityEvent($c) | ConvertFrom-Json }
+$c = New-Object Ctx; $c.Request.IpAddress = '10.11.1.4'; $c.Request.Headers.d['X-Azure-SocketIP'] = '130.199.137.2'
+Check ((Event $c).client -eq '130.199.137.2') 'security event: with no API policy run, a private peer (Front Door) gives X-Azure-SocketIP'
+$c.Request.IpAddress = '203.0.113.9'; $c.Request.Headers.d['X-Azure-SocketIP'] = '198.51.100.7'
+Check ((Event $c).client -eq '203.0.113.9') 'security event: a public peer is the caller, whatever X-Azure-SocketIP says'
+$c.Variables.d['clientAddress'] = '130.199.137.5'
+Check ((Event $c).client -eq '130.199.137.5') 'security event: clientAddress, when an API policy has set it, wins'
+$c = New-Object Ctx; $c.Subscription = New-Object Sub; $c.Subscription.Id = 'svc-x'
+Check ((Event $c).callerType -eq 'key') 'security event: a request with a subscription is a key caller'
+$c = New-Object Ctx; $c.Variables.d['callerType'] = 'user'
+Check ((Event $c).callerType -eq 'user') 'security event: a keyless request keeps the caller type the open product set'
+$c = New-Object Ctx; $c.Subscription = New-Object Sub; $c.Subscription.Id = 'sub-oid'; $c.Subscription.Name = 'Grace Hopper'
+Check (((Event $c).callerId -eq 'sub-oid') -and ((Event $c).callerName -eq 'Grace Hopper')) 'security event: before usageId is set, a keyed request is named by its subscription'
+$c = New-Object Ctx; $c.Variables.d['callerId'] = 'oid-1'; $c.Variables.d['callerName'] = 'Ada Lovelace'
+Check (((Event $c).callerId -eq 'oid-1') -and ((Event $c).callerName -eq 'Ada Lovelace')) 'security event: before usageId is set, a keyless request is named by the token check (catalog, early refusal)'
+$c.Variables.d['usageId'] = 'u-1'; $c.Variables.d['usageName'] = 'U One'
+Check (((Event $c).callerId -eq 'u-1') -and ((Event $c).callerName -eq 'U One')) 'security event: usageId and usageName win once an API policy has set them'
+$c = New-Object Ctx; $c.LastError = New-Object ErrInfo; $c.LastError.Source = 'ip-filter'; $c.Response.StatusCode = 403
+$e = Event $c
+Check (($e.status -eq 403) -and ($e.errorSource -eq 'ip-filter') -and ($e.requestId.Length -gt 0)) 'security event: a refusal records its status and reason'
 
 "failures: $bad"
 if ($bad -gt 0) { exit 1 }
