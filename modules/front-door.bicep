@@ -37,6 +37,16 @@ param certificateSourceId string = ''
 @description('Further host names this profile serves, each { hostName, certificateSourceId } (the secret in the same form as certificateSourceId). Each gets its own certificate secret and custom domain on the same route and WAF policy. Add them once the profile identity has the Key Vault role on each secret, which the parent template grants in the same deployment: if the first deployment fails reading a secret, run it again.')
 param extraDomains array = []
 
+@description('First path segments the gateway serves, without a leading slash (for example openai, or providers/blackforestlabs/v1). The KnownPathsOnly rule acts on any other path: scanners ask for /, /.git, /wp-admin and the like. Empty creates no such rule.')
+param knownPaths array = []
+
+@description('What the KnownPathsOnly and RateLimitPerAddress rules do. Start with Log, read the WAF log for a week, then Block.')
+@allowed([ 'Log', 'Block' ])
+param edgeRuleAction string = 'Log'
+
+@description('Requests from one address in five minutes before RateLimitPerAddress acts. Each edge location counts on its own, so the total allowed can be several times this. Microsoft advises a high threshold, about twice the busiest legitimate address.')
+param rateLimitPer5Minutes int = 2000
+
 @description('Whether the WAF inspects request bodies. A prompt with code or SQL can look like an attack to the managed rules, so turn it on only after a test with real prompts.')
 param inspectRequestBody bool = false
 
@@ -131,6 +141,63 @@ resource endpoint 'Microsoft.Cdn/profiles/afdEndpoints@2024-02-01' = {
 // The allow-list custom rule, when there is a list, runs first, so the managed rules only see listed
 // clients. SocketAddr is the address of the connection that reached Front Door. RemoteAddr would
 // follow X-Forwarded-For, which any caller can set.
+var allowListRules = empty(allowedClientIps) ? [] : [
+  {
+    name: 'BlockUnlistedClients'
+    priority: 100
+    ruleType: 'MatchRule'
+    action: 'Block'
+    matchConditions: [
+      {
+        matchVariable: 'SocketAddr'
+        operator: 'IPMatch'
+        negateCondition: true
+        matchValue: allowedClientIps
+      }
+    ]
+  }
+]
+
+// RequestUri is the whole address, so the pattern allows an optional scheme and host before the path.
+var knownPathRules = empty(knownPaths) ? [] : [
+  {
+    name: 'KnownPathsOnly'
+    priority: 200
+    ruleType: 'MatchRule'
+    action: edgeRuleAction
+    matchConditions: [
+      {
+        matchVariable: 'RequestUri'
+        operator: 'RegEx'
+        negateCondition: true
+        transforms: [ 'Lowercase' ]
+        matchValue: [ '^(https?://[^/]+)?/(${join(knownPaths, '|')})(/|\\?|$)' ]
+      }
+    ]
+  }
+]
+
+// Counts per socket address. The condition matches every request, as in Microsoft's example.
+var rateLimitRules = [
+  {
+    name: 'RateLimitPerAddress'
+    priority: 300
+    ruleType: 'RateLimitRule'
+    action: edgeRuleAction
+    rateLimitDurationInMinutes: 5
+    rateLimitThreshold: rateLimitPer5Minutes
+    matchConditions: [
+      {
+        matchVariable: 'RequestHeader'
+        selector: 'Host'
+        operator: 'GreaterThan'
+        negateCondition: false
+        matchValue: [ '0' ]
+      }
+    ]
+  }
+]
+
 resource waf 'Microsoft.Network/frontDoorWebApplicationFirewallPolicies@2024-02-01' = {
   name: wafPolicyName
   location: 'global'
@@ -150,22 +217,7 @@ resource waf 'Microsoft.Network/frontDoorWebApplicationFirewallPolicies@2024-02-
       ]
     }
     customRules: {
-      rules: empty(allowedClientIps) ? [] : [
-        {
-          name: 'BlockUnlistedClients'
-          priority: 100
-          ruleType: 'MatchRule'
-          action: 'Block'
-          matchConditions: [
-            {
-              matchVariable: 'SocketAddr'
-              operator: 'IPMatch'
-              negateCondition: true
-              matchValue: allowedClientIps
-            }
-          ]
-        }
-      ]
+      rules: concat(allowListRules, knownPathRules, rateLimitRules)
     }
   }
 }

@@ -142,6 +142,13 @@ param frontDoorExtraDomains array = []
 @description('Addresses and ranges allowed to read the Event Hub from outside the VNet (the NAT pool, for a reader on site). Empty keeps its public network access Disabled. The gateway writes through the private endpoint either way.')
 param eventHubAllowedIps array = []
 
+@description('What the Front Door rules for unknown paths and for too many requests from one address do: Log, then Block after a week of clean WAF logs.')
+@allowed([ 'Log', 'Block' ])
+param wafEdgeRuleAction string = 'Log'
+
+@description('Requests from one address in five minutes before the rate limit rule acts. Classic prod peaked at 597 from the busiest address in 14 days, so the default is about three times that.')
+param wafRateLimitPer5Minutes int = 2000
+
 @description('Whether the Front Door WAF inspects request bodies. A prompt with code or SQL can look like an attack to the managed rules, so it is on only where a test with real prompts has passed.')
 param wafInspectRequestBody bool = false
 
@@ -320,6 +327,20 @@ var bflApiDisplayName = 'Black Forest Labs FLUX API'
 var maiApiName = 'mai-image-api'
 var maiApiPath = 'mai/v1'
 var maiApiDisplayName = 'Microsoft MAI Image API'
+
+// What Front Door lets through to the gateway. The Azure OpenAI API has no path prefix, so its
+// operations start at /deployments and /models (measured on Classic prod: both are in use). The last
+// entry is the health path of the gateway.
+var edgeKnownPaths = [
+  openaiV1MessagesApiPath
+  anthropicApiPath
+  bflApiPath
+  maiApiPath
+  catalogApiPath
+  'deployments'
+  'models'
+  'status-0123456789abcdef'
+]
 
 var catalogApiName = 'catalog-api'
 var catalogApiPath = 'catalog'
@@ -534,6 +555,9 @@ module frontDoor 'modules/front-door.bicep' = {
     apimHostName: apiManagement.outputs.apiManagementDefaultHostName
     apimLocation: location
     allowedClientIps: wafAllowList(allowedClientIps)
+    knownPaths: edgeKnownPaths
+    edgeRuleAction: wafEdgeRuleAction
+    rateLimitPer5Minutes: wafRateLimitPer5Minutes
     inspectRequestBody: wafInspectRequestBody
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
     customDomainHostName: frontDoorHostName
