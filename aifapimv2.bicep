@@ -137,6 +137,9 @@ param apimNamePrefix string = 'apim'
 @description('Host name clients use to reach the gateway through Front Door, such as aifapimv2-dev.nsls2.bnl.gov. Front Door serves the certificate gatewayKeyVaultSecretName from the vault keyVaultName (RSA, with its intermediates), and the host name must be in it. Leave empty for the first deployment: the Front Door identity needs the Key Vault role first.')
 param frontDoorHostName string = ''
 
+@description('Further host names Front Door serves for the same gateway, each { hostName, secretName }: the secret is a certificate in the vault keyVaultName (RSA, with its intermediates, with the host name in it). Each gets its own Front Door secret and custom domain, and a Key Vault role scoped to that secret. The gateway needs no change: no policy reads the host name. Cutover to a name is the DNS record, and rollback is the record pointing back.')
+param frontDoorExtraDomains array = []
+
 @description('Addresses and ranges allowed to read the Event Hub from outside the VNet (the NAT pool, for a reader on site). Empty keeps its public network access Disabled. The gateway writes through the private endpoint either way.')
 param eventHubAllowedIps array = []
 
@@ -535,6 +538,10 @@ module frontDoor 'modules/front-door.bicep' = {
     inspectRequestBody: wafInspectRequestBody
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
     customDomainHostName: frontDoorHostName
+    extraDomains: [for d in frontDoorExtraDomains: {
+      hostName: d.hostName
+      certificateSourceId: resourceId(subscription().subscriptionId, keyVaultResourceGroup, 'Microsoft.KeyVault/vaults/secrets', keyVaultName, d.secretName)
+    }]
     certificateSourceId: empty(keyVaultName) ? '' : resourceId(subscription().subscriptionId, keyVaultResourceGroup, 'Microsoft.KeyVault/vaults/secrets', keyVaultName, gatewayKeyVaultSecretName)
     tags: tags
   }
@@ -555,6 +562,19 @@ module frontDoorKeyVaultAccess 'modules/keyvault-role.bicep' = if (!empty(keyVau
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
   }
 }
+
+module frontDoorExtraKeyVaultAccess 'modules/keyvault-role.bicep' = [for d in frontDoorExtraDomains: if (!empty(keyVaultName)) {
+  name: 'kvSecretUserForFrontDoor-${replace(d.hostName, '.', '-')}'
+  scope: resourceGroup(keyVaultResourceGroup)
+  params: {
+    keyVaultName: keyVaultName
+    secretName: d.secretName
+    roleName: guid(subscription().id, keyVaultName, 'afd-${unique}', 'KeyVaultSecretUser', d.secretName)
+    principalId: frontDoor.outputs.identityPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
+  }
+}]
 
 resource apimServiceRef 'Microsoft.ApiManagement/service@2024-05-01' existing = {
   name: apiManagementServiceName

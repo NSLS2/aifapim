@@ -34,6 +34,9 @@ param customDomainHostName string = ''
 @description('Resource ID of the Key Vault secret behind the certificate, in the subscription of this profile. The certificate must be RSA, with its intermediate certificates.')
 param certificateSourceId string = ''
 
+@description('Further host names this profile serves, each { hostName, certificateSourceId } (the secret in the same form as certificateSourceId). Each gets its own certificate secret and custom domain on the same route and WAF policy. Add them once the profile identity has the Key Vault role on each secret, which the parent template grants in the same deployment: if the first deployment fails reading a secret, run it again.')
+param extraDomains array = []
+
 @description('Whether the WAF inspects request bodies. A prompt with code or SQL can look like an attack to the managed rules, so turn it on only after a test with real prompts.')
 param inspectRequestBody bool = false
 
@@ -89,6 +92,33 @@ resource customDomain 'Microsoft.Cdn/profiles/customDomains@2024-02-01' = if (us
     }
   }
 }
+
+resource extraCertificates 'Microsoft.Cdn/profiles/secrets@2024-02-01' = [for d in extraDomains: {
+  parent: profile
+  name: 'cert-${replace(d.hostName, '.', '-')}'
+  properties: {
+    parameters: {
+      type: 'CustomerCertificate'
+      secretSource: { id: d.certificateSourceId }
+      useLatestVersion: true
+    }
+  }
+}]
+
+resource extraCustomDomains 'Microsoft.Cdn/profiles/customDomains@2024-02-01' = [for (d, i) in extraDomains: {
+  parent: profile
+  name: replace(d.hostName, '.', '-')
+  properties: {
+    hostName: d.hostName
+    tlsSettings: {
+      certificateType: 'CustomerCertificate'
+      minimumTlsVersion: 'TLS12'
+      secret: { id: extraCertificates[i].id }
+    }
+  }
+}]
+
+var extraDomainRefs = [for (d, i) in extraDomains: { id: extraCustomDomains[i].id }]
 
 resource endpoint 'Microsoft.Cdn/profiles/afdEndpoints@2024-02-01' = {
   parent: profile
@@ -181,7 +211,7 @@ resource route 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = {
   dependsOn: [ origin ]
   properties: {
     originGroup: { id: originGroup.id }
-    customDomains: useCustomDomain ? [ { id: customDomain.id } ] : []
+    customDomains: concat(useCustomDomain ? [ { id: customDomain.id } ] : [], extraDomainRefs)
     supportedProtocols: [ 'Https' ]
     patternsToMatch: [ '/*' ]
     forwardingProtocol: 'HttpsOnly'
@@ -199,7 +229,7 @@ resource security 'Microsoft.Cdn/profiles/securityPolicies@2024-02-01' = {
       wafPolicy: { id: waf.id }
       associations: [
         {
-          domains: concat([ { id: endpoint.id } ], useCustomDomain ? [ { id: customDomain.id } ] : [])
+          domains: concat([ { id: endpoint.id } ], useCustomDomain ? [ { id: customDomain.id } ] : [], extraDomainRefs)
           patternsToMatch: [ '/*' ]
         }
       ]
