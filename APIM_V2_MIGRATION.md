@@ -304,7 +304,7 @@ Answers have no write-once copy (see the follow-up page).
 | Risk | Where it is handled |
 | --- | --- |
 | LLM01 Prompt injection | Not at the gateway: the application or agent that holds the tools. A pattern filter here blocks real work. A Content Safety study is open. |
-| LLM02 Sensitive information disclosure | Part: the gateway logs prompts, restricts who reads the logs (Grafana limited to its tables), and an offline secret scan is planned. Which data people send is policy and training. |
+| LLM02 Sensitive information disclosure | Part: the gateway logs prompts, restricts who reads the logs (the LLM log table is Protected and Grafana reads five named tables only, `../aifapim-config/docs/llm-security-follow-up.md` item 1), and an offline secret scan is planned. Which data people send is policy and training. |
 | LLM03 Supply chain | Hosted models only; a model joins the catalog by approval. |
 | LLM04 Data and model poisoning | Does not apply: no training or fine-tuning here. |
 | LLM05 Improper output handling | The application that uses the answer. |
@@ -569,10 +569,12 @@ To do:
   two headers must reach the gateway unchanged through Front Door
 - [x] Grafana: Dev v2 in the Environment variable and a v2 edge row (Front Door,
   WAF, gateway CPU and memory, `Agent Client`, Classic against v2); every
-  workspace query run against the dev v2 workspace. Still to do: the reader
-  roles for the Grafana app (Log Analytics Reader on `law-rckovrtmvdr3y`,
-  Monitoring Reader on `apim-dev-rckovrtmvdr3y`), import, and the memory panel
-  (a metrics query not tried in Grafana yet); Prod v2 when the stack exists
+  workspace query run against the dev v2 workspace. Roles for the Grafana
+  app: a Log Analytics Data Reader limited to the five tables the dashboard
+  reads (`modules/workspace-table-reader.bicep`, no unconditioned Reader) and
+  Monitoring Reader on each gateway, both stacks. Still to do: import, the
+  memory panel (a metrics query not tried in Grafana yet), and Prod v2 in the
+  Environment variable
 
 ### Phase 4: prod
 
