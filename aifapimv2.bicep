@@ -121,6 +121,9 @@ param usageTrace bool = false
 @maxValue(4383)
 param llmLogTotalRetentionInDays int = 4383
 
+@description('Object id of the Grafana app (NSLS2 Grafana Monitor). When set, it gets read access to the dashboard tables of the gateway workspace and no other; remove its Log Analytics Reader on the workspace by hand, which this template did not create.')
+param grafanaPrincipalId string = ''
+
 @description('Name of the virtual network created by aifapimv2-network.bicep, in this resource group.')
 param vnetName string
 
@@ -491,6 +494,17 @@ module logAnalyticsWorkspace 'modules/log-analytics-workspace.bicep' = {
     llmLogTotalRetentionInDays: llmLogTotalRetentionInDays
     tags: tags
   }
+}
+
+module grafanaTableReader 'modules/workspace-table-reader.bicep' = if (!empty(grafanaPrincipalId)) {
+  name: 'grafana-table-reader'
+  params: {
+    workspaceName: logAnalyticsName
+    principalId: grafanaPrincipalId
+  }
+  dependsOn: [
+    logAnalyticsWorkspace
+  ]
 }
 
 module applicationInsights 'modules/app-insights.bicep' = {
