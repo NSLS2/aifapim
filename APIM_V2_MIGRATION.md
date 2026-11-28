@@ -266,14 +266,32 @@ the NAT pool on both stacks (a check in the product policy). The template
 creates the WAF allow-list rule and the global gateway address check only when
 `allowedClientIps` is not empty.
 
-**Edge rules for the public names**, each starting on Log and moving to Block
-after a clean week in the WAF log: a key header is required (except on the
-health path), only the known API paths and the GET and POST methods are allowed,
-and a rate limit per address, set from the Hermes traffic on Classic (twice to
-three times the peak; Microsoft advises a high threshold and a 5-minute window).
-The managed rules exclude the four key headers. Request body inspection stays
-off: a prompt with code, SQL or a shell command looks like an attack to the
-managed rules.
+**Edge rules for the public names**, both on Log first and moved to Block
+after a clean week in the WAF log (`wafEdgeRuleAction`):
+
+- `KnownPathsOnly` acts on any path that is not an API prefix of the gateway
+  (`openai`, `anthropic`, `catalog`, `mai/v1`, `providers/blackforestlabs/v1`),
+  the two roots of the Azure OpenAI API, which has no prefix (`deployments` and
+  `models`), or the health path. On Classic prod in 14 days, 462 unlisted
+  addresses sent about 30,000 requests that got a 4xx, almost all 404s for `/`,
+  `/public`, `/wp-content`, `/.git`, `/wp-admin`, `/index.php`, `/api` and `/mcp`,
+  and 2 requests from outside got through. Successful traffic used only the
+  prefixes above (`/deployments` 194 times and `/models` 7 times as well).
+- `RateLimitPerAddress` counts requests per socket address in five minutes
+  (`wafRateLimitPer5Minutes`, 2000). The busiest legitimate address on Classic
+  prod peaked at 597 in five minutes (the 90th percentile of the peaks was 170).
+  Each Front Door edge location counts on its own, so the total allowed can be
+  several times the threshold. Microsoft advises a high threshold.
+
+Not done, and why. A rule that blocks a request without a key header: Front
+Door's documentation does not say how to match an absent header, reports say a
+custom rule does not fire for one, and keys arrive as `x-api-key`, `api-key`,
+`Authorization` or the `subscription-key` query parameter; the gateway answers
+401 without a key. Key headers are not excluded from the managed rules: every
+call of the prod and dev model tests passed its key through them in Prevention
+mode. Methods are not limited: the gateway's operations decide, and GET and POST
+are not the only ones in use. Request body inspection stays off: a prompt with
+code, SQL or a shell command looks like an attack to the managed rules.
 
 **Accepted risks.** A valid key works from anywhere on prod from deploy day, with
 the key, the WAF and the product locks as the controls. A key revoked on Classic
