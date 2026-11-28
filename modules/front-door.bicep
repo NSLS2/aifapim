@@ -22,7 +22,7 @@ param apimHostName string
 @description('Region of the API Management instance, where Front Door creates the private endpoint.')
 param apimLocation string
 
-@description('Addresses and ranges allowed to call. Everything else is blocked at the edge.')
+@description('Addresses and ranges allowed to call. Everything else is blocked at the edge. Empty creates no allow-list rule: any address may reach the gateway, with a key.')
 param allowedClientIps array
 
 @description('Resource ID of the Log Analytics workspace for the access, health probe and WAF logs.')
@@ -128,9 +128,9 @@ resource endpoint 'Microsoft.Cdn/profiles/afdEndpoints@2024-02-01' = {
   properties: { enabledState: 'Enabled' }
 }
 
-// The allow-list custom rule runs first, so the managed rules only see listed clients.
-// SocketAddr is the address of the connection that reached Front Door. RemoteAddr would follow
-// X-Forwarded-For, which any caller can set.
+// The allow-list custom rule, when there is a list, runs first, so the managed rules only see listed
+// clients. SocketAddr is the address of the connection that reached Front Door. RemoteAddr would
+// follow X-Forwarded-For, which any caller can set.
 resource waf 'Microsoft.Network/frontDoorWebApplicationFirewallPolicies@2024-02-01' = {
   name: wafPolicyName
   location: 'global'
@@ -150,7 +150,7 @@ resource waf 'Microsoft.Network/frontDoorWebApplicationFirewallPolicies@2024-02-
       ]
     }
     customRules: {
-      rules: [
+      rules: empty(allowedClientIps) ? [] : [
         {
           name: 'BlockUnlistedClients'
           priority: 100

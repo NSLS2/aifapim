@@ -77,8 +77,7 @@ param audioRequestsPerMinute int = 10
 ])
 param bflEndpointDomain string = 'cognitiveservices.azure.com'
 
-@description('Inbound IP allow-list applied to all three APIM APIs. Each entry is either a single IPv4 address (e.g., "192.0.2.1") or a CIDR range (e.g., "10.0.0.0/16"). CIDR entries are expanded via parseCidr().firstUsable/lastUsable, so the network and broadcast addresses are excluded from the allow-list.')
-@minLength(1)
+@description('Inbound IP allow-list applied to all three APIM APIs. Each entry is either a single IPv4 address (e.g., "192.0.2.1") or a CIDR range (e.g., "10.0.0.0/16"). CIDR entries are expanded via parseCidr().firstUsable/lastUsable, so the network and broadcast addresses are excluded from the allow-list. Empty means public with a key: the Front Door WAF has no allow-list rule and the API policies make no address check. Products with their own allowedClientIps still check the address.')
 param allowedClientIps array
 
 @description('APIM product name (and App Insights custom-metric namespace). All three APIs are grouped under this product, and the <llm-emit-token-metric> / <emit-metric> policies emit under this namespace. Must be a valid APIM resource name (lowercase alphanumerics + hyphens).')
@@ -224,7 +223,7 @@ func dropIpFilter(xml string) string => replace(replace(xml, '<ip-filter action=
 // its name, so existing metric queries and workbooks still work.
 func v2Policy(xml string) string => replace(dropIpFilter(xml), 'context.Request.Headers.GetValueOrDefault(&quot;X-Forwarded-For&quot;, context.Request.IpAddress)', '(string)context.Variables.GetValueOrDefault(&quot;clientAddress&quot;, context.Request.IpAddress)')
 
-var allowedIpsXml = '${clientAddressXml}${clientCheckXml(clientRangeNumbers(allowedClientIps, true))}'
+var allowedIpsXml = '${clientAddressXml}${empty(allowedClientIps) ? '' : clientCheckXml(clientRangeNumbers(allowedClientIps, true))}'
 
 // The Front Door WAF refuses a list in which an address lies inside a range of the same list, so
 // bare addresses covered by a listed CIDR are left out. (Two overlapping CIDRs are not handled.) Every
