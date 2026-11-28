@@ -116,6 +116,11 @@ param transcriptionCatalogJson string = '[]'
 @description('Write one Application Insights trace per request to the five inference APIs that names the caller (the subscription of a key, or the object id of a token caller), with the request id, API, product and model. Join it to ApiManagementGatewayLlmLog on CorrelationId for tokens per caller. Needed for keyless callers of the open product, which have no subscription to name them in the gateway log; harmless for keyed callers.')
 param usageTrace bool = false
 
+@description('Days the gateway LLM log (prompts and answers, ApiManagementGatewayLlmLog) is kept in all, 365 searchable then long-term storage. Prod keeps the 4383 maximum; dev sets 365.')
+@minValue(365)
+@maxValue(4383)
+param llmLogTotalRetentionInDays int = 4383
+
 @description('Name of the virtual network created by aifapimv2-network.bicep, in this resource group.')
 param vnetName string
 
@@ -483,6 +488,7 @@ module logAnalyticsWorkspace 'modules/log-analytics-workspace.bicep' = {
   params: {
     location: location
     logAnalyticsName: logAnalyticsName
+    llmLogTotalRetentionInDays: llmLogTotalRetentionInDays
     tags: tags
   }
 }
